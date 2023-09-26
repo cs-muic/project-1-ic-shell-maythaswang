@@ -1,11 +1,11 @@
-CC=gcc
-CFLAGS=-Wall -g 
+CPL=g++
+FLAGS=-Wall -g 
 BINARY=icsh
 
 all: icsh
 
-icsh: icsh.c
-	$(CC) -o $(BINARY) $(CFLAGS) $<
+icsh: icsh.cpp
+	$(CPL) -o $(BINARY) $(FLAGS) $<
 
 .PHONY: clean
 
