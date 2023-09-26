@@ -11,6 +11,7 @@
 #include <map>
 #include <sstream>
 #include <regex>
+#include <fstream>
 
 #define MAX_CMD_BUFFER 255
 
@@ -26,25 +27,49 @@ Command sto_cmd(string); //change string to command.
 vector<string> tokenize_cmd(string);//tokenize commands into parts <in case of handling flags too.>
 void echo(vector<string>); //echo <text> 
 bool double_bang_mod(string, string&); //<.*>!!<.*>
-bool check_exit(vector<string> &);
+bool check_exit(vector<string> &); //check if exit is valid, set the prev_exit value. 
+void script_mode(int , char **);//runs the script.
 
 //Global var init
 std::map<std::string, Command> cmd_map;
 string prev_cmd;
-unsigned short prev_exit;
+unsigned short prev_exit = 0;
 
 int main(int argc, char *argv[]){
     char buffer[MAX_CMD_BUFFER]; //maybe modify tokenizer to make it handle flags easier?
     bool exit = false;
     populate_map_cmd();
-    cout << "Starting IC shell"<<endl;
-
-    while (!exit) {
-        printf("icsh $ ");
-        string inp = fgets(buffer, 255, stdin); 
-        exit = call_command(inp);
+    
+    if (argc > 1) {
+        script_mode(argc, argv);
+    } else { 
+        cout << "Starting IC shell"<<endl;
+        while (!exit) {
+            printf("icsh $ ");
+            string inp = fgets(buffer, 255, stdin); 
+            exit = call_command(inp);
+        }
     }
+
     return prev_exit;
+}
+
+void script_mode(int argc, char *argv[]){ 
+    if(argc != 2) cout << "Invalid numbers of arguments." << endl;
+    else {
+        string buffer;//[MAX_CMD_BUFFER];
+
+        ifstream inp_script(argv[1]);
+
+        if(inp_script.is_open()){
+            while(getline(inp_script, buffer)){
+                call_command(buffer);
+            }
+        }
+        else cout << "Invalid arguments." << endl;
+    }
+
+    //TODO: check if we need to repeat the function prompt first before calling when using !!
 }
 
 bool call_command(string inp){
@@ -70,6 +95,7 @@ bool call_command(string inp){
         case Command::EXIT:
             exit = check_exit(base_command);
             if(!exit) cout << "bad command"; 
+            else return exit; //this is to prevent the final endl on as opposed to other calls.
             break;
         
         case Command::EMPTY:
@@ -89,7 +115,6 @@ bool call_command(string inp){
 bool double_bang_mod(string inp, string &new_cmd){ //This is currently implemented in a similar manner to bash.
     if(inp.find("!!") != string::npos){
         if(!prev_cmd.empty()) new_cmd = regex_replace(inp, regex("!!"),prev_cmd);
-        else cout <<"no previous command"<< endl; //may need to send a specific error msg.
         return 1; 
     }
     new_cmd = inp;
@@ -111,7 +136,7 @@ bool check_exit(vector<string> &cmd){ // returns exit bool
         if(!all_digit) return exit;
 
         exit = true;
-        cout << "bye";
+        
         prev_exit = stoi(cmd[1]) %265; 
 
         //TODO: maybe required truncation with bitwise? (switch to unsigned char required?), 
