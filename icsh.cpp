@@ -67,6 +67,8 @@ void script_mode(int argc, char *argv[]){
             }
         }
         else cout << "Invalid arguments." << endl;
+
+        inp_script.close();
     }
 
     //TODO: check if we need to repeat the function prompt first before calling when using !!
