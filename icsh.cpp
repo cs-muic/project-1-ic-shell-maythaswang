@@ -1,4 +1,4 @@
-/* ICCS227: Project 1: icsh
+ /* ICCS227: Project 1: icsh
  * Name: Maythas Wangcharoenwong
  * StudentID: 6480265
  */
@@ -7,11 +7,14 @@
 #include <stdlib.h>
 #include <iostream>
 #include <string>
+#include <algorithm>
 #include <vector>
 #include <map>
 #include <sstream>
 #include <regex>
 #include <fstream>
+#include <unistd.h>
+#include <sys/wait.h>
 
 #define MAX_CMD_BUFFER 255
 
@@ -24,16 +27,18 @@ enum class Command {ECHO, EXIT, NONE, EMPTY};
 void populate_map_cmd(); //initial populating the string to command map. 
 bool call_command(string); //call command switch.
 Command sto_cmd(string); //change string to command. 
-vector<string> tokenize_cmd(string);//tokenize commands into parts <in case of handling flags too.>
+vector<string> tokenize_cmd(string&);//tokenize commands into parts <in case of handling flags too.>
 void echo(vector<string>); //echo <text> 
 bool double_bang_mod(string, string&); //<.*>!!<.*>
 bool check_exit(vector<string> &); //check if exit is valid, set the prev_exit value. 
 void script_mode(int , char **);//runs the script.
+void external_cmd_call(vector<string>); //temporary external command caller
 
 //Global var init
 std::map<std::string, Command> cmd_map;
 string prev_cmd;
 unsigned short prev_exit = 0;
+pid_t foreground_pid = 0; //Temporary variable to store foreground process PID in Milestone 3
 
 int main(int argc, char *argv[]){
     char buffer[MAX_CMD_BUFFER]; //maybe modify tokenizer to make it handle flags easier?
@@ -54,6 +59,69 @@ int main(int argc, char *argv[]){
     return prev_exit;
 }
 
+bool call_command(string inp){
+    bool exit = false;
+    string mod_inp;
+    bool db_exist = double_bang_mod(inp, mod_inp); //double bang checking
+    mod_inp.erase(remove(mod_inp.begin(), mod_inp.end(), '\n'), mod_inp.end());
+    
+    if(mod_inp.empty()) return false;
+    if(db_exist) cout << mod_inp << endl;
+
+    Command current = Command::EMPTY;    
+    vector<string> base_command = tokenize_cmd(mod_inp); 
+    
+    if(!base_command.empty()) current = sto_cmd(base_command[0]);
+
+    switch(current){    
+        case Command::ECHO:
+            echo(base_command);
+            cout << endl;
+            prev_exit = 0;
+            break;
+        
+        case Command::EXIT:
+            exit = check_exit(base_command);
+            if(!exit) cout << "bad command"<< endl; 
+            else return exit; //this is to prevent the final endl on as opposed to other calls.
+            break;
+        
+        case Command::EMPTY:
+            cout << endl;
+            return exit;
+
+        case Command::NONE:
+        default:
+            external_cmd_call(base_command);
+            //cout << "bad command"; 
+    }
+
+    prev_cmd = mod_inp;
+    //cout << endl;
+
+    return exit;
+}   
+
+void external_cmd_call(vector<string> cmd){
+    vector<char*> argv(cmd.size() +1);
+    for(unsigned int i = 0; i < cmd.size(); i++){
+        argv[i] = const_cast<char*>(cmd[i].c_str());
+    }
+
+    foreground_pid = fork();
+    
+    if(foreground_pid < 0){
+        perror("Fork failed.");
+        exit(errno);
+    }
+    else if (foreground_pid == 0){
+        execvp(argv[0],argv.data());
+        perror("execvp call failed.");
+        exit(errno);
+    }
+    else waitpid(foreground_pid, NULL, 0);
+}
+
 void script_mode(int argc, char *argv[]){ 
     if(argc != 2) cout << "Invalid numbers of arguments." << endl;
     else {
@@ -72,46 +140,6 @@ void script_mode(int argc, char *argv[]){
     }
 
     //TODO: check if we need to repeat the function prompt first before calling when using !!
-}
-
-bool call_command(string inp){
-    bool exit = false;
-    string mod_inp;
-    bool db_exist = double_bang_mod(inp, mod_inp); //double bang checking
-    mod_inp.erase(remove(mod_inp.begin(), mod_inp.end(), '\n'), mod_inp.end());
-    
-    if(mod_inp.empty()) return false;
-    if(db_exist) cout << mod_inp << endl;
-
-    Command current = Command::EMPTY;    
-    vector<string> base_command = tokenize_cmd(mod_inp); 
-    
-    if(!base_command.empty()) current = sto_cmd(base_command[0]);
-
-    switch(current){    
-        case Command::ECHO:
-            echo(base_command);
-            prev_exit = 0;
-            break;
-        
-        case Command::EXIT:
-            exit = check_exit(base_command);
-            if(!exit) cout << "bad command"; 
-            else return exit; //this is to prevent the final endl on as opposed to other calls.
-            break;
-        
-        case Command::EMPTY:
-            return exit;
-
-        case Command::NONE:
-        default:
-            cout << "bad command"; 
-    }
-
-    prev_cmd = mod_inp;
-    cout << endl;
-
-    return exit;
 }
 
 bool double_bang_mod(string inp, string &new_cmd){ //This is currently implemented in a similar manner to bash.
@@ -155,7 +183,7 @@ void populate_map_cmd(){
     cmd_map["exit"] = Command::EXIT;
 }
 
-vector<string> tokenize_cmd(string inp){
+vector<string> tokenize_cmd(string& inp){
     vector<string> separated;
     string next_str;
     istringstream cmd_stream(inp);

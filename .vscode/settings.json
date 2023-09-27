@@ -32,6 +32,11 @@
         "regex": "cpp",
         "ostream": "cpp",
         "locale": "cpp",
-        "fstream": "cpp"
+        "fstream": "cpp",
+        "array": "cpp",
+        "bitset": "cpp",
+        "string_view": "cpp",
+        "atomic": "cpp",
+        "memory": "cpp"
     }
 }
