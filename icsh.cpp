@@ -32,7 +32,7 @@ void echo(vector<string>); //echo <text>
 bool double_bang_mod(string, string&); //<.*>!!<.*>
 bool check_exit(vector<string> &); //check if exit is valid, set the prev_exit value. 
 void script_mode(int , char **);//runs the script.
-void external_cmd_call(vector<string>); //temporary external command caller
+int external_cmd_call(vector<string>); //temporary external command caller this returns the exit val of child
 
 //Global var init
 std::map<std::string, Command> cmd_map;
@@ -92,7 +92,7 @@ bool call_command(string inp){
 
         case Command::NONE:
         default:
-            external_cmd_call(base_command);
+            prev_exit = external_cmd_call(base_command);
             //cout << "bad command"; 
     }
 
@@ -102,8 +102,9 @@ bool call_command(string inp){
     return exit;
 }   
 
-void external_cmd_call(vector<string> cmd){
+int external_cmd_call(vector<string> cmd){
     vector<char*> argv(cmd.size() +1);
+    int status, n_exit_stat = EXIT_FAILURE;
     for(unsigned int i = 0; i < cmd.size(); i++){
         argv[i] = const_cast<char*>(cmd[i].c_str());
     }
@@ -113,13 +114,16 @@ void external_cmd_call(vector<string> cmd){
     if(foreground_pid < 0){
         perror("Fork failed.");
         exit(errno);
-    }
-    else if (foreground_pid == 0){
+    } else if (foreground_pid == 0){
         execvp(argv[0],argv.data());
-        perror("execvp call failed.");
+        perror("execvp call failed.");  
         exit(errno);
+    } else {
+        waitpid(foreground_pid, &status, 0);
+        if(WIFEXITED(status)) n_exit_stat = WEXITSTATUS(status); 
     }
-    else waitpid(foreground_pid, NULL, 0);
+
+    return n_exit_stat %256;
 }
 
 void script_mode(int argc, char *argv[]){ 
@@ -152,7 +156,10 @@ bool double_bang_mod(string inp, string &new_cmd){ //This is currently implement
 }
 
 void echo(vector<string> cmd){
-    if (cmd.size() > 1) {
+    if (cmd.size() == 2 && cmd[1] == "$?") {
+        cout << prev_exit;
+    }
+    else if (cmd.size() > 1) {
         for (unsigned int i = 1; i < cmd.size(); i++){ cout << cmd[i] << " ";}
     }
 }
@@ -167,7 +174,7 @@ bool check_exit(vector<string> &cmd){ // returns exit bool
 
         exit = true;
         
-        prev_exit = stoi(cmd[1]) %265; 
+        prev_exit = stoi(cmd[1]) %256; 
 
         //TODO: maybe required truncation with bitwise? (switch to unsigned char required?), 
         //handle error (find alternative to stoi that is not the very not so nice naive loop.) 
