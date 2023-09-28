@@ -16,6 +16,7 @@
 #include <unistd.h>
 #include <sys/wait.h>
 #include <signal.h>
+#include <fcntl.h>
 
 #define MAX_CMD_BUFFER 255
 
@@ -23,6 +24,7 @@ using namespace std;
 
 //-------------------- Enumerators --------------------
 enum class Command {ECHO, EXIT, NONE, EMPTY};
+enum class Redirect_IO {I, O, APD_I, APD_O}; //IO append(IO) accordingly
 
 //-------------------- Function foward declaration. --------------------
 void populate_map_cmd(); //initial populating the string to command map. 
@@ -44,7 +46,7 @@ unsigned short prev_exit = 0;
 pid_t foreground_pid = 0; //Temporary variable to store foreground process PID in Milestone 3
 bool fg_run = 0; //Temporary variable to check if there is a foreground process is running.
 
-//-------------------- Main Function and Command calls --------------------
+//-------------------- Main Function and Setups --------------------
 
 int main(int argc, char *argv[]){
     char buffer[MAX_CMD_BUFFER]; //maybe modify tokenizer to make it handle flags easier?
@@ -68,6 +70,8 @@ int main(int argc, char *argv[]){
     return prev_exit;
 }
 
+//-------------------- Command calls --------------------
+
 bool call_command(string inp){
     bool exit = false;
     string mod_inp;
@@ -81,6 +85,8 @@ bool call_command(string inp){
     vector<string> base_command = tokenize_cmd(mod_inp); 
     
     if(!base_command.empty()) current = sto_cmd(base_command[0]);
+
+    prev_cmd = mod_inp;
 
     switch(current){    
         case Command::ECHO:
@@ -102,14 +108,28 @@ bool call_command(string inp){
         case Command::NONE:
         default:
             prev_exit = external_cmd_call(base_command);
-            //cout << "bad command"; 
     }
-
-    prev_cmd = mod_inp;
-    //cout << endl;
 
     return exit;
 }   
+
+//-------------------- I/O Handling --------------------
+
+void IO_Handle(vector<const char*> argv){
+    int in = open(argv[1],O_RDONLY); //TODO: fix args
+    int out = open(argv[2], O_TRUNC|O_CREAT|O_WRONLY,0666); //TODO: fix args
+
+    if((in <= 0) || (out <= 0)){
+        fprintf(stderr,"Could not open a file.\n");
+        exit (errno);
+    }
+
+    dup2(in,0);
+    dup2(out, 1);
+
+    close(in);
+    close(out);
+}
 
 //-------------------- Signal handling --------------------
 
@@ -123,7 +143,6 @@ void sigtstp_handler(int sig){
 
 
 //-------------------- Process handling --------------------
-
 
 int external_cmd_call(vector<string> cmd){
     vector<char*> argv(cmd.size() +1);
@@ -139,6 +158,7 @@ int external_cmd_call(vector<string> cmd){
         exit(errno);
     } else if (foreground_pid == 0){
         execvp(argv[0],argv.data());
+        //IO_Handle() //file output redirect
         fg_run = true; 
         perror("execvp call failed.");  
         exit(errno);
@@ -174,9 +194,8 @@ void script_mode(int argc, char *argv[]){
         else cout << "Invalid arguments." << endl;
 
         inp_script.close();
-    }
+    }  //TODO: check if we need to repeat the function prompt first before calling when using !!
 
-    //TODO: check if we need to repeat the function prompt first before calling when using !!
 }
 
 //-------------------- Built-in commands --------------------

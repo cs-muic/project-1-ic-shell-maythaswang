@@ -37,6 +37,9 @@
         "bitset": "cpp",
         "string_view": "cpp",
         "atomic": "cpp",
-        "memory": "cpp"
+        "memory": "cpp",
+        "algorithm": "cpp",
+        "xiosbase": "cpp",
+        "xlocale": "cpp"
     }
 }
