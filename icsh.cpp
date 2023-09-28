@@ -15,15 +15,16 @@
 #include <fstream>
 #include <unistd.h>
 #include <sys/wait.h>
+#include <signal.h>
 
 #define MAX_CMD_BUFFER 255
 
 using namespace std;
 
-//Enumerators
+//-------------------- Enumerators --------------------
 enum class Command {ECHO, EXIT, NONE, EMPTY};
 
-//Function foward declaration.
+//-------------------- Function foward declaration. --------------------
 void populate_map_cmd(); //initial populating the string to command map. 
 bool call_command(string); //call command switch.
 Command sto_cmd(string); //change string to command. 
@@ -33,17 +34,25 @@ bool double_bang_mod(string, string&); //<.*>!!<.*>
 bool check_exit(vector<string> &); //check if exit is valid, set the prev_exit value. 
 void script_mode(int , char **);//runs the script.
 int external_cmd_call(vector<string>); //temporary external command caller this returns the exit val of child
+void sigint_handler(int);
+void sigtstp_handler(int);
 
-//Global var init
+//-------------------- Global var init --------------------
 std::map<std::string, Command> cmd_map;
 string prev_cmd;
 unsigned short prev_exit = 0;
 pid_t foreground_pid = 0; //Temporary variable to store foreground process PID in Milestone 3
+bool fg_run = 0; //Temporary variable to check if there is a foreground process is running.
+
+//-------------------- Main Function and Command calls --------------------
 
 int main(int argc, char *argv[]){
     char buffer[MAX_CMD_BUFFER]; //maybe modify tokenizer to make it handle flags easier?
     bool exit = false;
     populate_map_cmd();
+
+    signal(SIGINT, sigint_handler);
+    signal(SIGTSTP, sigtstp_handler);
     
     if (argc > 1) {
         script_mode(argc, argv);
@@ -102,12 +111,26 @@ bool call_command(string inp){
     return exit;
 }   
 
+//-------------------- Signal handling --------------------
+
+void sigint_handler(int sig){
+    if(fg_run) kill(foreground_pid,SIGINT);
+}
+
+void sigtstp_handler(int sig){
+    if(fg_run) kill(foreground_pid,SIGTSTP);
+}
+
+
+//-------------------- Process handling --------------------
+
+
 int external_cmd_call(vector<string> cmd){
     vector<char*> argv(cmd.size() +1);
     int status, n_exit_stat = EXIT_FAILURE;
     for(unsigned int i = 0; i < cmd.size(); i++){
         argv[i] = const_cast<char*>(cmd[i].c_str());
-    }
+    }   
 
     foreground_pid = fork();
     
@@ -116,15 +139,25 @@ int external_cmd_call(vector<string> cmd){
         exit(errno);
     } else if (foreground_pid == 0){
         execvp(argv[0],argv.data());
+        fg_run = true; 
         perror("execvp call failed.");  
         exit(errno);
     } else {
-        waitpid(foreground_pid, &status, 0);
+        waitpid(foreground_pid, &status, WUNTRACED);
         if(WIFEXITED(status)) n_exit_stat = WEXITSTATUS(status); 
+        else if(WTERMSIG(status)){
+            n_exit_stat = 1; 
+            cout << "\nprocess " << foreground_pid << " has been stopped." << endl;
+        }
+        else if(WIFSTOPPED(status)){
+            cout << "\nthe process has been stopped" << endl;
+        }
     }
-
+    fg_run = false; 
     return n_exit_stat %256;
 }
+
+//-------------------- Script mode --------------------
 
 void script_mode(int argc, char *argv[]){ 
     if(argc != 2) cout << "Invalid numbers of arguments." << endl;
@@ -145,6 +178,8 @@ void script_mode(int argc, char *argv[]){
 
     //TODO: check if we need to repeat the function prompt first before calling when using !!
 }
+
+//-------------------- Built-in commands --------------------
 
 bool double_bang_mod(string inp, string &new_cmd){ //This is currently implemented in a similar manner to bash.
     if(inp.find("!!") != string::npos){
@@ -184,6 +219,8 @@ bool check_exit(vector<string> &cmd){ // returns exit bool
 
     return exit;
 }
+
+//-------------------- ENUM setups and tokenization --------------------
 
 void populate_map_cmd(){
     cmd_map["echo"] = Command::ECHO;
