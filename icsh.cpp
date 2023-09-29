@@ -24,7 +24,7 @@ using namespace std;
 
 //-------------------- Enumerators --------------------
 enum class Command {ECHO, EXIT, NONE, EMPTY};
-enum class Redirect_IO {I, O, APD_I, APD_O}; //IO append(IO) accordingly
+//enum class Redirect_IO {IN, OUT}; //IO append(IO) accordingly
 
 //-------------------- Function foward declaration. --------------------
 void populate_map_cmd(); //initial populating the string to command map. 
@@ -36,8 +36,11 @@ bool double_bang_mod(string, string&); //<.*>!!<.*>
 bool check_exit(vector<string> &); //check if exit is valid, set the prev_exit value. 
 void script_mode(int , char **);//runs the script.
 int external_cmd_call(vector<string>); //temporary external command caller this returns the exit val of child
-void sigint_handler(int);
-void sigtstp_handler(int);
+void sigint_handler(int); //SIGINT handler
+void sigtstp_handler(int); //SIGTSTP handler
+bool IO_handle(vector<string>, int&); //handle redirection, 0: no redirect, 1: redirect
+void do_redirect(vector<string>,int); //Handle IO redirection if there are pointers.
+vector<string> tokenize_IO_FILE(vector<string>, int &);//Tokenize command to redirected files and status.
 
 //-------------------- Global var init --------------------
 std::map<std::string, Command> cmd_map;
@@ -115,20 +118,58 @@ bool call_command(string inp){
 
 //-------------------- I/O Handling --------------------
 
-void IO_Handle(vector<const char*> argv){
-    int in = open(argv[1],O_RDONLY); //TODO: fix args
-    int out = open(argv[2], O_TRUNC|O_CREAT|O_WRONLY,0666); //TODO: fix args
+bool IO_handle(vector<string> cmd, int& redir_i){
+    int status;
+    vector<string> cmd_IO_redir = tokenize_IO_FILE(cmd, status);
+
+    if(status == 0) return 0;
+    else do_redirect(cmd_IO_redir,status);
+    return 1;
+}
+
+void do_redirect(vector<string> argv,int status){
+    cout << argv[0].c_str() << endl;
+    cout << argv[1].c_str() << endl;
+    int in = open(argv[0].c_str(),O_RDONLY); //read to something
+    int out = open(argv[1].c_str(), O_TRUNC|O_CREAT|O_WRONLY,0666); // write to something
 
     if((in <= 0) || (out <= 0)){
         fprintf(stderr,"Could not open a file.\n");
         exit (errno);
     }
 
-    dup2(in,0);
-    dup2(out, 1);
+    dup2(in,1);
+    dup2(out, 0);
 
     close(in);
     close(out);
+}
+ 
+vector<string> tokenize_IO_FILE(vector<string> cmd, int &status){ 
+    //Choose the first redirection sign only.
+    //int status = 0; //0: No Redirect, 1: '<', 2: '>', 4: invalid input <deprecated>
+    vector<string> cmd_IO;
+    string f = "", s = "";
+    status = 0;
+
+    for (string c: cmd){
+        if (c == "<" && !status){
+            status = 1;
+
+        } else if (c == ">" && !status){
+            status = 2;
+        } else {
+            if (!status) f.append(c).append(" ");
+            else s.append(c).append(" ");
+        }
+    }
+    if(f.length()!= 0) f.pop_back();
+    if(s.length()!= 0) s.pop_back();
+
+    cmd_IO.push_back(f);
+    cmd_IO.push_back(s);
+
+    return cmd_IO;
 }
 
 //-------------------- Signal handling --------------------
@@ -157,8 +198,9 @@ int external_cmd_call(vector<string> cmd){
         perror("Fork failed.");
         exit(errno);
     } else if (foreground_pid == 0){
+        IO_handle(cmd);
+
         execvp(argv[0],argv.data());
-        //IO_Handle() //file output redirect
         fg_run = true; 
         perror("execvp call failed.");  
         exit(errno);
@@ -167,7 +209,7 @@ int external_cmd_call(vector<string> cmd){
         if(WIFEXITED(status)) n_exit_stat = WEXITSTATUS(status); 
         else if(WTERMSIG(status)){
             n_exit_stat = 1; 
-            cout << "\nprocess " << foreground_pid << " has been stopped." << endl;
+            cout << "\nprocess " << foreground_pid << " has been terminated." << endl;
         }
         else if(WIFSTOPPED(status)){
             cout << "\nthe process has been stopped" << endl;
@@ -239,7 +281,7 @@ bool check_exit(vector<string> &cmd){ // returns exit bool
     return exit;
 }
 
-//-------------------- ENUM setups and tokenization --------------------
+//-------------------- ENUM setups and CMD tokenization --------------------
 
 void populate_map_cmd(){
     cmd_map["echo"] = Command::ECHO;
