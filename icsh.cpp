@@ -30,17 +30,17 @@ enum class Command {ECHO, EXIT, NONE, EMPTY};
 void populate_map_cmd(); //initial populating the string to command map. 
 bool call_command(string); //call command switch.
 Command sto_cmd(string); //change string to command. 
-vector<string> tokenize_cmd(string&);//tokenize commands into parts <in case of handling flags too.>
-void echo(vector<string>); //echo <text> 
+vector<string> tokenize_cmd(string&, int&, int&);//tokenize commands using whitespace with io redirection support.
+void echo(vector<string>); //echo <text>    
 bool double_bang_mod(string, string&); //<.*>!!<.*>
 bool check_exit(vector<string> &); //check if exit is valid, set the prev_exit value. 
 void script_mode(int , char **);//runs the script.
-int external_cmd_call(vector<string>); //temporary external command caller this returns the exit val of child
+int external_cmd_call(vector<string>, int, int); //temporary external command caller this returns the exit val of child
 void sigint_handler(int); //SIGINT handler
 void sigtstp_handler(int); //SIGTSTP handler
-bool IO_handle(vector<string>, int&); //handle redirection, 0: no redirect, 1: redirect
-void do_redirect(vector<string>,int); //Handle IO redirection if there are pointers.
-vector<string> tokenize_IO_FILE(vector<string>, int &);//Tokenize command to redirected files and status.
+bool IO_handle(string, int, int); //handle redirection, 0: no redirect, 1: redirect
+void do_redirect(string,int, int); //Handle IO redirection if there are pointers.
+bool split_cmd_IO(vector<string> , int , int , vector<string>& , string&);
 
 //-------------------- Global var init --------------------
 std::map<std::string, Command> cmd_map;
@@ -77,18 +77,19 @@ int main(int argc, char *argv[]){
 
 bool call_command(string inp){
     bool exit = false;
+    int redir_index = -1,redir_type = -1;
     string mod_inp;
-    bool db_exist = double_bang_mod(inp, mod_inp); //double bang checking
-    mod_inp.erase(remove(mod_inp.begin(), mod_inp.end(), '\n'), mod_inp.end());
-    
-    if(mod_inp.empty()) return false;
-    if(db_exist) cout << mod_inp << endl;
 
-    Command current = Command::EMPTY;    
-    vector<string> base_command = tokenize_cmd(mod_inp); 
+    bool db_exist = double_bang_mod(inp, mod_inp); //Check Double Bang
+    mod_inp.erase(remove(mod_inp.begin(), mod_inp.end(), '\n'), mod_inp.end());// Erase EOL
     
-    if(!base_command.empty()) current = sto_cmd(base_command[0]);
+    if(mod_inp.empty()) return false; //Re-prompt if empty command
+    if(db_exist) cout << mod_inp << endl; //Repeat prompt if !! exist
 
+    Command current = Command::EMPTY; //Set default enum to empty
+    vector<string> base_command = tokenize_cmd(mod_inp,redir_index,redir_type);  //tokenize command
+
+    if(!base_command.empty()) current = sto_cmd(base_command[0]); //Get command ENUM
     prev_cmd = mod_inp;
 
     switch(current){    
@@ -110,7 +111,7 @@ bool call_command(string inp){
 
         case Command::NONE:
         default:
-            prev_exit = external_cmd_call(base_command);
+            prev_exit = external_cmd_call(base_command, redir_index, redir_type);
     }
 
     return exit;
@@ -118,58 +119,54 @@ bool call_command(string inp){
 
 //-------------------- I/O Handling --------------------
 
-bool IO_handle(vector<string> cmd, int& redir_i){
-    int status;
-    vector<string> cmd_IO_redir = tokenize_IO_FILE(cmd, status);
+bool IO_handle(string filename, int redir_i, int redir_type){
+    printf("%d %d\n",redir_i, redir_type);
+    cout << filename << endl;
 
-    if(status == 0) return 0;
-    else do_redirect(cmd_IO_redir,status);
+    if(redir_type == -1) return 0;
+    else do_redirect(filename,redir_i,redir_type);
     return 1;
 }
 
-void do_redirect(vector<string> argv,int status){
-    cout << argv[0].c_str() << endl;
-    cout << argv[1].c_str() << endl;
-    int in = open(argv[0].c_str(),O_RDONLY); //read to something
-    int out = open(argv[1].c_str(), O_TRUNC|O_CREAT|O_WRONLY,0666); // write to something
 
-    if((in <= 0) || (out <= 0)){
-        fprintf(stderr,"Could not open a file.\n");
-        exit (errno);
-    }
-
-    dup2(in,1);
-    dup2(out, 0);
-
-    close(in);
-    close(out);
-}
- 
-vector<string> tokenize_IO_FILE(vector<string> cmd, int &status){ 
-    //Choose the first redirection sign only.
-    //int status = 0; //0: No Redirect, 1: '<', 2: '>', 4: invalid input <deprecated>
-    vector<string> cmd_IO;
-    string f = "", s = "";
-    status = 0;
-
-    for (string c: cmd){
-        if (c == "<" && !status){
-            status = 1;
-
-        } else if (c == ">" && !status){
-            status = 2;
-        } else {
-            if (!status) f.append(c).append(" ");
-            else s.append(c).append(" ");
+void do_redirect(string filename,int redir_i, int redir_type){
+    int in,out; 
+    
+    if(!redir_type){ // OUT > 
+        in = open(filename.c_str(), O_TRUNC|O_CREAT|O_WRONLY,0666); 
+        
+        if(in <= 0){
+            fprintf(stderr,"Could not open a file.\n");
+            exit(errno);
         }
+        dup2(in,1);
+        close(in);
+    } else { // < IN
+        out = open(filename.c_str(),O_RDONLY); 
+        
+        if(out <= 0){
+            fprintf(stderr,"Could not open a file.\n");
+            exit(errno);
+        }
+        dup2(out, 0);
+        close(out);
     }
-    if(f.length()!= 0) f.pop_back();
-    if(s.length()!= 0) s.pop_back();
+}
 
-    cmd_IO.push_back(f);
-    cmd_IO.push_back(s);
+/**
+ * @brief splits the command into new command and filename, the function returns whether IO redirection is required.
+ * @return bool (0: no redir, 1: has redir)
 
-    return cmd_IO;
+ */
+bool split_cmd_IO(vector<string> cmd, int redir_i, int redir_type, vector<string>& new_cmd, string& filename){ 
+    filename = "";
+    if(redir_type == -1) return 0;
+    else{
+        for(int i = 0; i < redir_i; i++) new_cmd.push_back(cmd[i]);
+        for(unsigned int i = redir_i + 1; i < cmd.size(); i++) filename.append(cmd[i]).append(" ");
+    }
+    if(!filename.empty()) filename.pop_back();
+    return 1;
 }
 
 //-------------------- Signal handling --------------------
@@ -182,15 +179,21 @@ void sigtstp_handler(int sig){
     if(fg_run) kill(foreground_pid,SIGTSTP);
 }
 
-
 //-------------------- Process handling --------------------
 
-int external_cmd_call(vector<string> cmd){
-    vector<char*> argv(cmd.size() +1);
+int external_cmd_call(vector<string> cmd, int redir_i, int redir_type){
     int status, n_exit_stat = EXIT_FAILURE;
+    vector<string> new_cmd;
+    string filename;
+    bool redir = split_cmd_IO(cmd, redir_i, redir_type, new_cmd, filename);
+    if(redir) cmd = new_cmd;
+    
+    vector<char*> argv(cmd.size() +1);
     for(unsigned int i = 0; i < cmd.size(); i++){
         argv[i] = const_cast<char*>(cmd[i].c_str());
     }   
+
+
 
     foreground_pid = fork();
     
@@ -198,7 +201,7 @@ int external_cmd_call(vector<string> cmd){
         perror("Fork failed.");
         exit(errno);
     } else if (foreground_pid == 0){
-        IO_handle(cmd);
+        if(redir_type != -1) IO_handle(filename,redir_i,redir_type);
 
         execvp(argv[0],argv.data());
         fg_run = true; 
@@ -288,13 +291,25 @@ void populate_map_cmd(){
     cmd_map["exit"] = Command::EXIT;
 }
 
-vector<string> tokenize_cmd(string& inp){
+vector<string> tokenize_cmd(string& inp, int& redir_index, int& redir_type){ //implement handling for IO redirection support here.
     vector<string> separated;
     string next_str;
     istringstream cmd_stream(inp);
-    
+    int i = 0;
+
     while(getline(cmd_stream >> ws, next_str, ' ')){
-        if (next_str != " ") separated.push_back(next_str);
+        if (next_str != " "){
+            separated.push_back(next_str);
+            if(next_str == ">" && redir_index == -1) { //OUT
+                redir_type = 0; 
+                redir_index = i;
+            } else if(next_str == "<" && redir_index == -1){ //IN
+                redir_type = 1;
+                redir_index = i;
+            }
+            i++;
+        }
+        
     }
     return separated;
 }
