@@ -24,7 +24,6 @@ using namespace std;
 
 //-------------------- Enumerators --------------------
 enum class Command {ECHO, EXIT, NONE, EMPTY};
-//enum class Redirect_IO {IN, OUT}; //IO append(IO) accordingly
 
 //-------------------- Function foward declaration. --------------------
 void populate_map_cmd(); //initial populating the string to command map. 
@@ -38,9 +37,10 @@ void script_mode(int , char **);//runs the script.
 int external_cmd_call(vector<string>, int, int); //temporary external command caller this returns the exit val of child
 void sigint_handler(int); //SIGINT handler
 void sigtstp_handler(int); //SIGTSTP handler
-bool IO_handle(string, int, int); //handle redirection, 0: no redirect, 1: redirect
-void do_redirect(string,int, int); //Handle IO redirection if there are pointers.
-bool split_cmd_IO(vector<string> , int , int , vector<string>& , string&);
+bool IO_handle(string, int, bool); //handle IO redirection main, 0: failure, 1: success
+bool split_cmd_IO(vector<string> , int , int , vector<string>& , string&); //Handle IO reder
+void backup_stdio();
+void restore_stdio();
 
 //-------------------- Global var init --------------------
 std::map<std::string, Command> cmd_map;
@@ -48,6 +48,8 @@ string prev_cmd;
 unsigned short prev_exit = 0;
 pid_t foreground_pid = 0; //Temporary variable to store foreground process PID in Milestone 3
 bool fg_run = 0; //Temporary variable to check if there is a foreground process is running.
+int STDOUT_FDESC; //Stores file descriptor for stdout
+int STDIN_FDESC; //Stores file descriptor for stdin
 
 //-------------------- Main Function and Setups --------------------
 
@@ -58,6 +60,7 @@ int main(int argc, char *argv[]){
 
     signal(SIGINT, sigint_handler);
     signal(SIGTSTP, sigtstp_handler);
+    backup_stdio();
     
     if (argc > 1) {
         script_mode(argc, argv);
@@ -92,10 +95,17 @@ bool call_command(string inp){
     if(!base_command.empty()) current = sto_cmd(base_command[0]); //Get command ENUM
     prev_cmd = mod_inp;
 
+    vector<string> new_cmd;
+    string filename;
+    bool redir = split_cmd_IO(base_command, redir_index, redir_type, new_cmd, filename);;
+
     switch(current){    
-        case Command::ECHO:
-            echo(base_command);
-            cout << endl;
+        case Command::ECHO: //Isolate io redirect only to echo.
+            if(redir){
+                if(IO_handle(filename,redir_type,1)) echo(new_cmd);   
+                restore_stdio();
+            } 
+            else echo(base_command);
             prev_exit = 0;
             break;
         
@@ -119,38 +129,30 @@ bool call_command(string inp){
 
 //-------------------- I/O Handling --------------------
 
-bool IO_handle(string filename, int redir_i, int redir_type){
-    printf("%d %d\n",redir_i, redir_type);
-    cout << filename << endl;
-
-    if(redir_type == -1) return 0;
-    else do_redirect(filename,redir_i,redir_type);
-    return 1;
-}
-
-
-void do_redirect(string filename,int redir_i, int redir_type){
+bool IO_handle(string filename, int redir_type, bool internal){
     int in,out; 
-    
-    if(!redir_type){ // OUT > 
+    if(redir_type == 0){ // OUT > 
         in = open(filename.c_str(), O_TRUNC|O_CREAT|O_WRONLY,0666); 
         
         if(in <= 0){
             fprintf(stderr,"Could not open a file.\n");
-            exit(errno);
+            if(!internal) exit(errno); //try set exit only for child processes.
+            else return 0;
         }
         dup2(in,1);
         close(in);
-    } else { // < IN
+    } else if (redir_type == 1){ // < IN
         out = open(filename.c_str(),O_RDONLY); 
         
         if(out <= 0){
             fprintf(stderr,"Could not open a file.\n");
-            exit(errno);
+            if(!internal) exit(errno);
+            else return 0;
         }
         dup2(out, 0);
         close(out);
-    }
+    } else return 0;
+    return 1;
 }
 
 /**
@@ -169,6 +171,15 @@ bool split_cmd_IO(vector<string> cmd, int redir_i, int redir_type, vector<string
     return 1;
 }
 
+void backup_stdio(){
+    STDOUT_FDESC = dup(0);
+    STDIN_FDESC = dup(1);
+}
+
+void restore_stdio(){
+    dup2(STDOUT_FDESC,0);
+    dup2(STDIN_FDESC,1);
+}
 //-------------------- Signal handling --------------------
 
 void sigint_handler(int sig){
@@ -193,15 +204,13 @@ int external_cmd_call(vector<string> cmd, int redir_i, int redir_type){
         argv[i] = const_cast<char*>(cmd[i].c_str());
     }   
 
-
-
     foreground_pid = fork();
     
     if(foreground_pid < 0){
         perror("Fork failed.");
         exit(errno);
     } else if (foreground_pid == 0){
-        if(redir_type != -1) IO_handle(filename,redir_i,redir_type);
+        if(redir_type != -1) IO_handle(filename,redir_type,0);
 
         execvp(argv[0],argv.data());
         fg_run = true; 
@@ -261,6 +270,7 @@ void echo(vector<string> cmd){
     else if (cmd.size() > 1) {
         for (unsigned int i = 1; i < cmd.size(); i++){ cout << cmd[i] << " ";}
     }
+    cout << endl;
 }
 
 bool check_exit(vector<string> &cmd){ // returns exit bool
@@ -272,13 +282,8 @@ bool check_exit(vector<string> &cmd){ // returns exit bool
         if(!all_digit) return exit;
 
         exit = true;
-        
         prev_exit = stoi(cmd[1]) %256; 
 
-        //TODO: maybe required truncation with bitwise? (switch to unsigned char required?), 
-        //handle error (find alternative to stoi that is not the very not so nice naive loop.) 
-        //set default value required or not? maybe throw bad command? < else if(cmd.size() == 1) prev_exit = 0; >
-        //or maybe find alternative to JMP to default case.
     } 
 
     return exit;
