@@ -22,12 +22,20 @@
 
 using namespace std;
 
+//-------------------- Structs --------------------
+struct Jobs{
+    int status;
+    pid_t pgid; //same as leader
+    pid_t job_id;
+    vector<pid_t> pid_list;
+} ;
+
 //-------------------- Enumerators --------------------
 enum class Command {ECHO, EXIT, EXTERNAL, EMPTY, FG, BG, JOBS};
 
 //-------------------- Function foward declaration. --------------------
 void populate_map_cmd(); //initial populating the string to command map. 
-bool call_command(string); //call command switch.
+bool call_command(string); //prepare commands and call command switch.
 Command sto_cmd(string); //change string to command. 
 vector<string> tokenize_cmd(string&, int&, int&);//tokenize commands using whitespace with io redirection support.
 void echo(vector<string>); //echo <text>    
@@ -38,9 +46,13 @@ int external_cmd_call(vector<string>); //temporary external command caller this 
 void sigint_handler(int); //SIGINT handler
 void sigtstp_handler(int); //SIGTSTP handler
 bool IO_handle(string, int, bool); //handle IO redirection main, 0: failure, 1: success
-bool split_cmd_IO(vector<string> , int , int , vector<string>& , string&); //Handle IO reder
-void backup_stdio();
-void restore_stdio();
+bool split_cmd_IO(vector<string> , int , int , vector<string>& , string&); //Split original command into new_command and filename
+void backup_stdio(); //backup file descriptor of the original STDIO
+void restore_stdio(); //restore to STDIO
+
+bool to_foreground(pid_t pgid);
+bool to_background(pid_t pgid);
+bool jobs_list();
 
 //-------------------- Global var init --------------------
 std::map<std::string, Command> cmd_map;
@@ -50,6 +62,9 @@ pid_t foreground_pid = 0; //Temporary variable to store foreground process PID i
 bool fg_run = 0; //Temporary variable to check if there is a foreground process is running.
 int STDOUT_FDESC; //Stores file descriptor for stdout
 int STDIN_FDESC; //Stores file descriptor for stdin
+
+vector<struct Jobs> g_bg_groups; //background groups jobs <or maybe change this to gpid/ job_id ?>
+
 
 //-------------------- Main Function and Setups --------------------
 
@@ -167,7 +182,7 @@ bool IO_handle(string filename, int redir_type, bool internal){
 }
 
 /**
- * @brief splits the command into new command and filename, the function returns whether IO redirection is required.
+ * @brief splits the command into new_cmd and filename, the function returns whether IO redirection is required.
  * @return bool (0: no redir, 1: has redir)
 
  */
@@ -201,6 +216,22 @@ void sigtstp_handler(int sig){
     if(fg_run) kill(foreground_pid,SIGTSTP);
 }
 
+//-------------------- Jobs control --------------------
+bool to_foreground(pid_t pgid){
+    return 0;
+}
+
+bool to_background(pid_t pgid){
+    kill(pgid, SIGCONT);
+    return 0;
+}
+
+bool jobs_list(){
+    for(struct Jobs j : g_bg_groups){
+        printf("yay!");
+    }
+    return 0;
+}
 //-------------------- Process handling --------------------
 
 int external_cmd_call(vector<string> cmd){
