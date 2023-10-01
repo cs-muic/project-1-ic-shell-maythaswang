@@ -23,7 +23,7 @@
 using namespace std;
 
 //-------------------- Enumerators --------------------
-enum class Command {ECHO, EXIT, NONE, EMPTY};
+enum class Command {ECHO, EXIT, EXTERNAL, EMPTY, FG, BG, JOBS};
 
 //-------------------- Function foward declaration. --------------------
 void populate_map_cmd(); //initial populating the string to command map. 
@@ -34,7 +34,7 @@ void echo(vector<string>); //echo <text>
 bool double_bang_mod(string, string&); //<.*>!!<.*>
 bool check_exit(vector<string> &); //check if exit is valid, set the prev_exit value. 
 void script_mode(int , char **);//runs the script.
-int external_cmd_call(vector<string>, int, int); //temporary external command caller this returns the exit val of child
+int external_cmd_call(vector<string>); //temporary external command caller this returns the exit val of child
 void sigint_handler(int); //SIGINT handler
 void sigtstp_handler(int); //SIGTSTP handler
 bool IO_handle(string, int, bool); //handle IO redirection main, 0: failure, 1: success
@@ -98,14 +98,13 @@ bool call_command(string inp){
     vector<string> new_cmd;
     string filename;
     bool redir = split_cmd_IO(base_command, redir_index, redir_type, new_cmd, filename);;
+    if(redir){
+        if(IO_handle(filename,redir_type,1)) base_command = new_cmd;   
+    }
 
     switch(current){    
         case Command::ECHO: //Isolate io redirect only to echo.
-            if(redir){
-                if(IO_handle(filename,redir_type,1)) echo(new_cmd);   
-                restore_stdio();
-            } 
-            else echo(base_command);
+            echo(base_command);
             prev_exit = 0;
             break;
         
@@ -117,13 +116,25 @@ bool call_command(string inp){
         
         case Command::EMPTY:
             cout << endl;
-            return exit;
+            break;
 
-        case Command::NONE:
+        case Command::FG:
+            cout << "fg called!" << endl;
+            break;
+
+        case Command::BG:
+            cout << "bg called!" << endl;
+            break;
+
+        case Command::JOBS:
+            cout << "jobs called!" << endl;
+            break;
+
+        case Command::EXTERNAL:
         default:
-            prev_exit = external_cmd_call(base_command, redir_index, redir_type);
+            prev_exit = external_cmd_call(base_command);
     }
-
+    restore_stdio();
     return exit;
 }   
 
@@ -192,12 +203,10 @@ void sigtstp_handler(int sig){
 
 //-------------------- Process handling --------------------
 
-int external_cmd_call(vector<string> cmd, int redir_i, int redir_type){
+int external_cmd_call(vector<string> cmd){
     int status, n_exit_stat = EXIT_FAILURE;
     vector<string> new_cmd;
     string filename;
-    bool redir = split_cmd_IO(cmd, redir_i, redir_type, new_cmd, filename);
-    if(redir) cmd = new_cmd;
     
     vector<char*> argv(cmd.size() +1);
     for(unsigned int i = 0; i < cmd.size(); i++){
@@ -210,8 +219,6 @@ int external_cmd_call(vector<string> cmd, int redir_i, int redir_type){
         perror("Fork failed.");
         exit(errno);
     } else if (foreground_pid == 0){
-        if(redir_type != -1) IO_handle(filename,redir_type,0);
-
         execvp(argv[0],argv.data());
         fg_run = true; 
         perror("execvp call failed.");  
@@ -292,8 +299,11 @@ bool check_exit(vector<string> &cmd){ // returns exit bool
 //-------------------- ENUM setups and CMD tokenization --------------------
 
 void populate_map_cmd(){
-    cmd_map["echo"] = Command::ECHO;
+    cmd_map["echo"] = Command::ECHO;    
     cmd_map["exit"] = Command::EXIT;
+    cmd_map["fg"] = Command::FG;
+    cmd_map["bg"] = Command::BG;
+    cmd_map["jobs"] = Command::JOBS;
 }
 
 vector<string> tokenize_cmd(string& inp, int& redir_index, int& redir_type){ //implement handling for IO redirection support here.
@@ -320,5 +330,5 @@ vector<string> tokenize_cmd(string& inp, int& redir_index, int& redir_type){ //i
 }
 
 Command sto_cmd(string inp){
-    return (cmd_map.find(inp) != cmd_map.end())? cmd_map[inp] : Command::NONE; 
+    return (cmd_map.find(inp) != cmd_map.end())? cmd_map[inp] : Command::EXTERNAL; 
 }
