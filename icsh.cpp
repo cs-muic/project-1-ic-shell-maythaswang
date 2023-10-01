@@ -257,13 +257,14 @@ int external_cmd_call(vector<string> cmd){
     } else {
         waitpid(foreground_pid, &status, WUNTRACED);
         if(WIFEXITED(status)) n_exit_stat = WEXITSTATUS(status); 
+        else if(WIFSTOPPED(status)){
+            cout << "\nthe process has been stopped" << endl;
+        }
         else if(WTERMSIG(status)){
             n_exit_stat = 1; 
             cout << "\nprocess " << foreground_pid << " has been terminated." << endl;
         }
-        else if(WIFSTOPPED(status)){
-            cout << "\nthe process has been stopped" << endl;
-        }
+
     }
     fg_run = false; 
     return n_exit_stat %256;
