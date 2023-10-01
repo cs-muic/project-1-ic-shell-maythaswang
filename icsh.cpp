@@ -51,15 +51,15 @@ void backup_stdio(); //backup file descriptor of the original STDIO
 void restore_stdio(); //restore to STDIO
 
 bool to_foreground(pid_t pgid);
-bool to_background(pid_t pgid);
+bool cont_background(pid_t pgid);
 bool jobs_list();
 
 //-------------------- Global var init --------------------
-std::map<std::string, Command> cmd_map;
-string prev_cmd;
-unsigned short prev_exit = 0;
-pid_t foreground_pid = 0; //Temporary variable to store foreground process PID in Milestone 3
-bool fg_run = 0; //Temporary variable to check if there is a foreground process is running.
+std::map<std::string, Command> g_cmd_map;
+string g_prev_cmd;
+unsigned short g_prev_exit = 0;
+pid_t g_fg_pid = 0; //Temporary variable to store foreground process PID in Milestone 3
+bool g_fg_run = 0; //Temporary variable to check if there is a foreground process is running.
 int STDOUT_FDESC; //Stores file descriptor for stdout
 int STDIN_FDESC; //Stores file descriptor for stdin
 
@@ -88,7 +88,7 @@ int main(int argc, char *argv[]){
         }
     }
 
-    return prev_exit;
+    return g_prev_exit;
 }
 
 //-------------------- Command calls --------------------
@@ -108,7 +108,7 @@ bool call_command(string inp){
     vector<string> base_command = tokenize_cmd(mod_inp,redir_index,redir_type);  //tokenize command
 
     if(!base_command.empty()) current = sto_cmd(base_command[0]); //Get command ENUM
-    prev_cmd = mod_inp;
+    g_prev_cmd = mod_inp;
 
     vector<string> new_cmd;
     string filename;
@@ -120,7 +120,7 @@ bool call_command(string inp){
     switch(current){    
         case Command::ECHO: //Isolate io redirect only to echo.
             echo(base_command);
-            prev_exit = 0;
+            g_prev_exit = 0;
             break;
         
         case Command::EXIT:
@@ -147,7 +147,7 @@ bool call_command(string inp){
 
         case Command::EXTERNAL:
         default:
-            prev_exit = external_cmd_call(base_command);
+            g_prev_exit = external_cmd_call(base_command);
     }
     restore_stdio();
     return exit;
@@ -209,11 +209,11 @@ void restore_stdio(){
 //-------------------- Signal handling --------------------
 
 void sigint_handler(int sig){
-    if(fg_run) kill(foreground_pid,SIGINT);
+    if(g_fg_run) kill(g_fg_pid,SIGINT);
 }
 
 void sigtstp_handler(int sig){
-    if(fg_run) kill(foreground_pid,SIGTSTP);
+    if(g_fg_run) kill(g_fg_pid,SIGTSTP);
 }
 
 //-------------------- Jobs control --------------------
@@ -221,7 +221,7 @@ bool to_foreground(pid_t pgid){
     return 0;
 }
 
-bool to_background(pid_t pgid){
+bool cont_background(pid_t pgid){
     kill(pgid, SIGCONT);
     return 0;
 }
@@ -244,29 +244,29 @@ int external_cmd_call(vector<string> cmd){
         argv[i] = const_cast<char*>(cmd[i].c_str());
     }   
 
-    foreground_pid = fork();
+    g_fg_pid = fork();
     
-    if(foreground_pid < 0){
+    if(g_fg_pid < 0){
         perror("Fork failed.");
         exit(errno);
-    } else if (foreground_pid == 0){
+    } else if (g_fg_pid == 0){
         execvp(argv[0],argv.data());
-        fg_run = true; 
+        g_fg_run = true; 
         perror("execvp call failed.");  
         exit(errno);
     } else {
-        waitpid(foreground_pid, &status, WUNTRACED);
+        waitpid(g_fg_pid, &status, WUNTRACED);
         if(WIFEXITED(status)) n_exit_stat = WEXITSTATUS(status); 
         else if(WIFSTOPPED(status)){
             cout << "\nthe process has been stopped" << endl;
         }
         else if(WTERMSIG(status)){
             n_exit_stat = 1; 
-            cout << "\nprocess " << foreground_pid << " has been terminated." << endl;
+            cout << "\nprocess " << g_fg_pid << " has been terminated." << endl;
         }
 
     }
-    fg_run = false; 
+    g_fg_run = false; 
     return n_exit_stat %256;
 }
 
@@ -295,7 +295,7 @@ void script_mode(int argc, char *argv[]){
 
 bool double_bang_mod(string inp, string &new_cmd){ //This is currently implemented in a similar manner to bash.
     if(inp.find("!!") != string::npos){
-        if(!prev_cmd.empty()) new_cmd = regex_replace(inp, regex("!!"),prev_cmd);
+        if(!g_prev_cmd.empty()) new_cmd = regex_replace(inp, regex("!!"),g_prev_cmd);
         return 1; 
     }
     new_cmd = inp;
@@ -304,7 +304,7 @@ bool double_bang_mod(string inp, string &new_cmd){ //This is currently implement
 
 void echo(vector<string> cmd){
     if (cmd.size() == 2 && cmd[1] == "$?") {
-        cout << prev_exit;
+        cout << g_prev_exit;
     }
     else if (cmd.size() > 1) {
         for (unsigned int i = 1; i < cmd.size(); i++){ cout << cmd[i] << " ";}
@@ -321,7 +321,7 @@ bool check_exit(vector<string> &cmd){ // returns exit bool
         if(!all_digit) return exit;
 
         exit = true;
-        prev_exit = stoi(cmd[1]) %256; 
+        g_prev_exit = stoi(cmd[1]) %256; 
 
     } 
 
@@ -331,11 +331,11 @@ bool check_exit(vector<string> &cmd){ // returns exit bool
 //-------------------- ENUM setups and CMD tokenization --------------------
 
 void populate_map_cmd(){
-    cmd_map["echo"] = Command::ECHO;    
-    cmd_map["exit"] = Command::EXIT;
-    cmd_map["fg"] = Command::FG;
-    cmd_map["bg"] = Command::BG;
-    cmd_map["jobs"] = Command::JOBS;
+    g_cmd_map["echo"] = Command::ECHO;    
+    g_cmd_map["exit"] = Command::EXIT;
+    g_cmd_map["fg"] = Command::FG;
+    g_cmd_map["bg"] = Command::BG;
+    g_cmd_map["jobs"] = Command::JOBS;
 }
 
 vector<string> tokenize_cmd(string& inp, int& redir_index, int& redir_type){ //implement handling for IO redirection support here.
@@ -362,5 +362,5 @@ vector<string> tokenize_cmd(string& inp, int& redir_index, int& redir_type){ //i
 }
 
 Command sto_cmd(string inp){
-    return (cmd_map.find(inp) != cmd_map.end())? cmd_map[inp] : Command::EXTERNAL; 
+    return (g_cmd_map.find(inp) != g_cmd_map.end())? g_cmd_map[inp] : Command::EXTERNAL; 
 }
