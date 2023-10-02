@@ -23,17 +23,20 @@
 using namespace std;
 
 //-------------------- Structs --------------------
-struct Jobs{
+struct Job{
     int status;
     pid_t pgid; //same as leader
     pid_t job_id;
+    string cmd;
     vector<pid_t> pid_list;
 } ;
+
+//maybe struct a new class for pid to point to job
 
 //-------------------- Enumerators --------------------
 enum class Command {ECHO, EXIT, EXTERNAL, EMPTY, FG, BG, JOBS};
 
-//-------------------- Function foward declaration. --------------------
+//-------------------- Function Forward Declaration. --------------------
 void populate_map_cmd(); //initial populating the string to command map. 
 bool call_command(string); //prepare commands and call command switch.
 Command sto_cmd(string); //change string to command. 
@@ -42,32 +45,38 @@ void echo(vector<string>); //echo <text>
 bool double_bang_mod(string, string&); //<.*>!!<.*>
 bool check_exit(vector<string> &); //check if exit is valid, set the prev_exit value. 
 void script_mode(int , char **);//runs the script.
-int external_cmd_call(vector<string>); //temporary external command caller this returns the exit val of child
-void sigint_handler(int); //SIGINT handler
-void sigtstp_handler(int); //SIGTSTP handler
+int external_cmd_call(vector<string>, bool, string); //temporary external command caller this returns the exit val of child
 bool IO_handle(string, int, bool); //handle IO redirection main, 0: failure, 1: success
 bool split_cmd_IO(vector<string> , int , int , vector<string>& , string&); //Split original command into new_command and filename
 void backup_stdio(); //backup file descriptor of the original STDIO
 void restore_stdio(); //restore to STDIO
 
-bool to_foreground(pid_t pgid);
-bool cont_background(pid_t pgid);
+int to_foreground(struct Job);
+bool to_background(struct Job);
 bool jobs_list();
+void update_jobs_list(); //TODO: Update this and make SIGCHLD to reap dead childs.
+string status_mapping(int status);
+
+//-------------------- Signal-Related FN Forward Declaration --------------------
+void sigint_handler(int); //SIGINT handler
+void sigtstp_handler(int); //SIGTSTP handler
+//TODO: Handle zombie process and child reaping.
 
 //-------------------- Global var init --------------------
 std::map<std::string, Command> g_cmd_map;
 string g_prev_cmd;
 unsigned short g_prev_exit = 0;
-pid_t g_fg_pid = 0; //Temporary variable to store foreground process PID in Milestone 3
-pid_t g_fg_gpid = 0; 
+pid_t g_pid = 0; //Temporary variable to store foreground process PID in Milestone 3
+pid_t g_fg_pgid = 0; 
 bool g_fg_run = 0; //Temporary variable to check if there is a foreground process is running.
 int STDOUT_FDESC; //Stores file descriptor for stdout
 int STDIN_FDESC; //Stores file descriptor for stdin
 
-int g_cur_job_id = 0;
+int g_shell_pgid = 0;
+int g_cur_job_id_count = 0;
 int g_job_done_count = 0;
 
-vector<struct Jobs> g_bg_jobs; //background group process/ jobs 
+vector<struct Job> g_bg_jobs; //background group process/ jobs 
 
 
 //-------------------- Main Function and Setups --------------------
@@ -77,8 +86,13 @@ int main(int argc, char *argv[]){
     bool exit = false;
     populate_map_cmd();
 
+    g_shell_pgid = getpgid(0); //get the pid of the shell and store it beforehand.
+    cout << g_shell_pgid << endl; //debug
+
     signal(SIGINT, sigint_handler);
     signal(SIGTSTP, sigtstp_handler);
+    signal(SIGTTIN, SIG_IGN);
+    signal(SIGTTOU, SIG_IGN);
     backup_stdio();
     
     if (argc > 1) {
@@ -111,7 +125,7 @@ bool call_command(string inp){
     Command current = Command::EMPTY; //Set default enum to empty
     vector<string> base_command = tokenize_cmd(mod_inp,redir_index,redir_type);  //tokenize command
 
-    bool run_fg = (base_command.back() == "&")? 0:1; //check if we're running this new cmd in fg or bg group
+    bool run_fg = (!base_command.empty() && base_command.back() == "&")? 0:1; //check if we're running this new cmd in fg or bg group
     if(!run_fg) base_command.pop_back();// remove & from the command 
 
 
@@ -124,7 +138,6 @@ bool call_command(string inp){
     if(redir){
         if(IO_handle(filename,redir_type,1)) base_command = new_cmd;   
     }
-
 
     // ----> maybe make the code above another function? 
 
@@ -141,7 +154,6 @@ bool call_command(string inp){
             break;
         
         case Command::EMPTY:
-            cout << endl;
             break;
 
         case Command::FG:
@@ -153,12 +165,11 @@ bool call_command(string inp){
             break;
 
         case Command::JOBS:
-            cout << "jobs called!" << endl;
+            jobs_list();
             break;
 
         case Command::EXTERNAL:
-        default:
-            g_prev_exit = external_cmd_call(base_command);
+            g_prev_exit = external_cmd_call(base_command,run_fg, mod_inp);
     }
     restore_stdio();
     return exit;
@@ -219,12 +230,13 @@ void restore_stdio(){
 }
 //-------------------- Signal handling --------------------
 
+// TODO: Fix this section to killpg instead and set the fg g_pid to be the one getting signal.
 void sigint_handler(int sig){
-    if(g_fg_run) kill(g_fg_pid,SIGINT);
+    if(g_fg_run && g_fg_pgid != -1) killpg(g_fg_pgid,SIGINT);
 }
 
 void sigtstp_handler(int sig){
-    if(g_fg_run) kill(g_fg_pid,SIGTSTP);
+    if(g_fg_run && g_fg_pgid != -1) killpg(g_fg_pgid,SIGTSTP);
 }
 
 //-------------------- Jobs control --------------------
@@ -236,12 +248,31 @@ pid_t spawn_bg_job(vector<string> cmd){
     return 0;
 }
 
-bool to_foreground(pid_t pgid){
-    return 0;
+int to_foreground(struct Job current_job){ //make in the cmd caller function to pass in the job instead of pgid, maybe make map or something to back-identify.
+    int status, n_exit_stat = EXIT_FAILURE;
+    pid_t pgid = current_job.pgid;
+    tcsetpgrp(0,pgid);
+    g_fg_pgid = pgid;
+    waitpid(pgid, &status, WUNTRACED);
+        
+    if(WIFEXITED(status)) n_exit_stat = WEXITSTATUS(status); 
+    else if(WIFSTOPPED(status)){
+        cout << "\nthe process has been stopped" << endl;
+        n_exit_stat = -1;
+        g_bg_jobs.push_back(current_job);
+    }
+    else if(WTERMSIG(status)){
+        n_exit_stat = 1; 
+        cout << "\nprocess " << pgid << " has been terminated." << endl;
+    }
+
+    g_fg_pgid = -1;
+    tcsetpgrp (0, g_shell_pgid);
+    return n_exit_stat % 256;
 }
 
-bool cont_background(pid_t pgid){
-    kill(pgid, SIGCONT);
+bool to_background(struct Job current_job){
+    if(killpg(current_job.pgid, SIGCONT) < 0) perror("SIGCONT FAILED"); //this is just a placeholder.
     return 0;
 }
 
@@ -249,15 +280,24 @@ void update_jobs_list(){
 
 }
 
+string status_mapping(int status){
+    string stat_str;
+    switch(status){
+        default:
+            stat_str = "Running";
+    }
+    return stat_str;        
+}
+
 bool jobs_list(){
-    for(struct Jobs j : g_bg_jobs){
-        printf("yay!");
+    for(struct Job j : g_bg_jobs){
+        cout << "[" << j.job_id << "] " << status_mapping(j.status) << "\t\t" << j.cmd << endl;
     }
     return 0;
 }
 //-------------------- Process handling --------------------
 
-int external_cmd_call(vector<string> cmd){
+int external_cmd_call(vector<string> cmd, bool is_fg, string cmd_string){
     int status, n_exit_stat = EXIT_FAILURE;
     vector<string> new_cmd;
     string filename;
@@ -266,31 +306,46 @@ int external_cmd_call(vector<string> cmd){
     for(unsigned int i = 0; i < cmd.size(); i++){
         argv[i] = const_cast<char*>(cmd[i].c_str());
     }   
+    struct Job current_job;
+    current_job.cmd = cmd_string;
 
-    g_fg_pid = fork();
-    
-    if(g_fg_pid < 0){
+    pid_t pid = fork();
+
+    //NOTE: If we're gonna handle several process per each job, throw all this in loop while doing the following.
+    //Determine which process will be the leader, maybe handle pipe from one process to another.
+
+    if(pid < 0){
         perror("Fork failed.");
         exit(errno);
-    } else if (g_fg_pid == 0){
+    } else if (pid == 0){
         execvp(argv[0],argv.data());
-        g_fg_run = true; 
         perror("execvp call failed.");  
         exit(errno);
     } else {
-        waitpid(g_fg_pid, &status, WUNTRACED);
+        current_job.pid_list.push_back(pid);
+        current_job.pgid = pid; //since we are going to have 1 process per job as for now.
+        setpgid(pid,current_job.pgid);
+        current_job.job_id = g_cur_job_id_count++; //TODO: make this increase only for background process and also start at 1.
+        
+        if(is_fg){
+            g_fg_run = true; 
+            n_exit_stat = to_foreground(current_job);
+        } else to_background(current_job);
+        /*
+        waitpid(pid, &status, WUNTRACED);
         if(WIFEXITED(status)) n_exit_stat = WEXITSTATUS(status); 
         else if(WIFSTOPPED(status)){
             cout << "\nthe process has been stopped" << endl;
         }
         else if(WTERMSIG(status)){
             n_exit_stat = 1; 
-            cout << "\nprocess " << g_fg_pid << " has been terminated." << endl;
+            cout << "\nprocess " << pid << " has been terminated." << endl;
         }
+        */
 
     }
     g_fg_run = false; 
-    return n_exit_stat %256;
+    return (n_exit_stat != -1)? n_exit_stat %256: n_exit_stat;
 }
 
 //-------------------- Script mode --------------------
