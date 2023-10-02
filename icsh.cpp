@@ -59,11 +59,15 @@ std::map<std::string, Command> g_cmd_map;
 string g_prev_cmd;
 unsigned short g_prev_exit = 0;
 pid_t g_fg_pid = 0; //Temporary variable to store foreground process PID in Milestone 3
+pid_t g_fg_gpid = 0; 
 bool g_fg_run = 0; //Temporary variable to check if there is a foreground process is running.
 int STDOUT_FDESC; //Stores file descriptor for stdout
 int STDIN_FDESC; //Stores file descriptor for stdin
 
-vector<struct Jobs> g_bg_groups; //background groups jobs <or maybe change this to gpid/ job_id ?>
+int g_cur_job_id = 0;
+int g_job_done_count = 0;
+
+vector<struct Jobs> g_bg_jobs; //background group process/ jobs 
 
 
 //-------------------- Main Function and Setups --------------------
@@ -107,15 +111,22 @@ bool call_command(string inp){
     Command current = Command::EMPTY; //Set default enum to empty
     vector<string> base_command = tokenize_cmd(mod_inp,redir_index,redir_type);  //tokenize command
 
+    bool run_fg = (base_command.back() == "&")? 0:1; //check if we're running this new cmd in fg or bg group
+    if(!run_fg) base_command.pop_back();// remove & from the command 
+
+
     if(!base_command.empty()) current = sto_cmd(base_command[0]); //Get command ENUM
     g_prev_cmd = mod_inp;
 
     vector<string> new_cmd;
     string filename;
-    bool redir = split_cmd_IO(base_command, redir_index, redir_type, new_cmd, filename);;
+    bool redir = split_cmd_IO(base_command, redir_index, redir_type, new_cmd, filename);
     if(redir){
         if(IO_handle(filename,redir_type,1)) base_command = new_cmd;   
     }
+
+
+    // ----> maybe make the code above another function? 
 
     switch(current){    
         case Command::ECHO: //Isolate io redirect only to echo.
@@ -217,6 +228,14 @@ void sigtstp_handler(int sig){
 }
 
 //-------------------- Jobs control --------------------
+pid_t spawn_fg_job(vector<string> cmd){
+    return 0;
+}
+
+pid_t spawn_bg_job(vector<string> cmd){
+    return 0;
+}
+
 bool to_foreground(pid_t pgid){
     return 0;
 }
@@ -226,8 +245,12 @@ bool cont_background(pid_t pgid){
     return 0;
 }
 
+void update_jobs_list(){
+
+}
+
 bool jobs_list(){
-    for(struct Jobs j : g_bg_groups){
+    for(struct Jobs j : g_bg_jobs){
         printf("yay!");
     }
     return 0;
