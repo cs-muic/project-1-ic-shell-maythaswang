@@ -28,6 +28,7 @@ struct Job{
     pid_t pgid; //same as leader
     int job_id;
     bool is_alive;
+    bool checked;
     string cmd;
     vector<pid_t> pid_list;
 } ;
@@ -77,7 +78,7 @@ int STDIN_FDESC; //Stores file descriptor for stdin
 
 int g_shell_pgid = 0;
 int g_cur_job_id_count = 0; //we start with 0 but the first job starts with 1 like this ++counter;
-int g_job_done_count = 0;
+int g_job_unalive_count = 0;
 
 vector<struct Job> g_bg_jobs; //background group process/ jobs 
 
@@ -103,6 +104,8 @@ int main(int argc, char *argv[]){
     } else { 
         cout << "Starting IC shell"<<endl;
         while (!exit) {
+            cout << g_cur_job_id_count;
+            update_jobs_list(); //update joblist before every prompt.
             printf("icsh $ ");
             string inp = fgets(buffer, 255, stdin); 
             exit = call_command(inp);
@@ -269,7 +272,13 @@ void sigtstp_handler(int sig){
     if(g_fg_run && g_fg_pgid != -1) killpg(g_fg_pgid,SIGTSTP);
 }
 
+void sigchld_handler(int sig){
+
+}
 //-------------------- Jobs control --------------------
+void job_wait(){
+    
+}
 
 int to_foreground(struct Job current_job){ //this must be called iff fgbg_cmd_get_job returns true or when spawining new process. Make handler to check if sigcont is necessary based on where its called. 
     int status, n_exit_stat = EXIT_FAILURE;
@@ -316,7 +325,20 @@ bool cont_background(struct Job current_job){
 }
 
 void update_jobs_list(){
-    
+    //call this at before each terminal loop start. Use queue to queue up the dead process string.
+    for(struct Job j: g_bg_jobs){
+        if (!j.checked && !j.is_alive){
+            g_job_unalive_count++;
+            j.checked = 1;
+            cout << "[" << j.job_id << "] " << status_mapping(j.status) << "\t\t" << j.cmd << endl;
+        } 
+    }
+
+    if(g_job_unalive_count == g_cur_job_id_count){ // do this last, we reset the job count to 0
+        g_bg_jobs.clear(); //reset all job list to empty list, takes O(n) Amortized O(1) per each bg process ever created.
+        g_job_unalive_count = 0;
+        g_cur_job_id_count = 0;
+    } 
 }
 
 string status_mapping(int status){ //maybe make a map for this.
@@ -352,7 +374,6 @@ bool fgbg_cmd_get_job(string inp, struct Job& j){
     return 0;
 }
 
-
 //-------------------- Process handling --------------------
 
 int external_cmd_call(vector<string> cmd, bool is_fg, string cmd_string){
@@ -366,6 +387,7 @@ int external_cmd_call(vector<string> cmd, bool is_fg, string cmd_string){
     }   
     struct Job current_job;
     current_job.cmd = cmd_string;
+    current_job.is_alive = 1;
 
     pid_t pid = fork();
 
@@ -393,7 +415,7 @@ int external_cmd_call(vector<string> cmd, bool is_fg, string cmd_string){
             current_job.job_id = ++g_cur_job_id_count;
             cont_background(current_job); 
         }
-        
+
     }
     g_fg_run = false; 
     return n_exit_stat %256;
