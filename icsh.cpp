@@ -27,6 +27,7 @@ struct Job{
     int status;
     pid_t pgid; //same as leader
     int job_id;
+    bool is_alive;
     string cmd;
     vector<pid_t> pid_list;
 } ;
@@ -126,14 +127,18 @@ Command build_command(string inp, string& modded_input, vector<string>& cmd, boo
     tmp_mod_inp.erase(remove(tmp_mod_inp.begin(), tmp_mod_inp.end(), '\n'), tmp_mod_inp.end());// Erase EOL
     if(tmp_mod_inp.empty()) return Command::EMPTY; //force return Command::EMPTY if command is empty
     if(db_exist) cout << tmp_mod_inp << endl; //Repeat prompt if !! exist
-    g_prev_cmd = tmp_mod_inp; //Set previous command history
 
     // Tokenize command
     full_cmd = tokenize_cmd(tmp_mod_inp,redir_index,redir_type);
+    if(full_cmd.empty()) return Command::EMPTY;
+    g_prev_cmd = tmp_mod_inp; //Set previous command history before & sign is removed.
 
     // Foreground Background checking
     run_fg_tmp = (!full_cmd.empty() && full_cmd.back() == "&")? 0:1; //run command in fg check
-    if(!run_fg_tmp) full_cmd.pop_back();// remove & if exist, cmd set as bg
+    if(!run_fg_tmp){
+        full_cmd.pop_back();// remove & if exist, cmd set as bg
+        tmp_mod_inp.pop_back();// remove & from original command.
+    }
 
     // Get command ENUM
     if(!full_cmd.empty()) main_command = sto_cmd(full_cmd[0]); 
@@ -172,7 +177,13 @@ bool call_command(string inp){
             break;
 
         case Command::FG:
-            cout << "fg called!" << endl;
+            if(full_cmd.size() != 2 ){
+                cout << "Invalid number of arguments!" << endl;   
+                break;
+            }
+            if(fgbg_cmd_get_job(full_cmd[1],job_of_interest)) to_foreground(job_of_interest);
+            else cout << "Invalid job id." << endl;
+
             break;
 
         case Command::BG:
@@ -180,9 +191,8 @@ bool call_command(string inp){
                 cout << "Invalid number of arguments!" << endl;   
                 break;
             }
-            fgbg_cmd_get_job(full_cmd[1],job_of_interest);
-            cont_background(job_of_interest);
-            
+            if(fgbg_cmd_get_job(full_cmd[1],job_of_interest))cont_background(job_of_interest);
+            else cout << "Invalid job id." << endl;
             break;
 
         case Command::JOBS:
@@ -251,7 +261,6 @@ void restore_stdio(){
 }
 //-------------------- Signal handling --------------------
 
-// TODO: Fix this section to killpg instead and set the fg g_pid to be the one getting signal.
 void sigint_handler(int sig){
     if(g_fg_run && g_fg_pgid != -1) killpg(g_fg_pgid,SIGINT);
 }
@@ -261,26 +270,31 @@ void sigtstp_handler(int sig){
 }
 
 //-------------------- Jobs control --------------------
-pid_t spawn_fg_job(vector<string> cmd){
-    return 0;
-}
 
-pid_t spawn_bg_job(vector<string> cmd){
-    return 0;
-}
-
-int to_foreground(struct Job current_job){ //make in the cmd caller function to pass in the job instead of pgid, maybe make map or something to back-identify.
+int to_foreground(struct Job current_job){ //this must be called iff fgbg_cmd_get_job returns true or when spawining new process. Make handler to check if sigcont is necessary based on where its called. 
     int status, n_exit_stat = EXIT_FAILURE;
     pid_t pgid = current_job.pgid;
     tcsetpgrp(0,pgid);
     g_fg_pgid = pgid;
+
+    if(killpg(pgid, SIGCONT) < 0){ //SIGCONT check here
+        perror("SIGCONT FAILED"); //this is just a placeholder. 
+    } 
+
     waitpid(pgid, &status, WUNTRACED);
         
     if(WIFEXITED(status)) n_exit_stat = WEXITSTATUS(status); 
     else if(WIFSTOPPED(status)){
         cout << "\nthe process has been stopped" << endl;
         n_exit_stat = 128 + WSTOPSIG(status); // 148 is signal for SIGTSTP
+        
+        if(current_job.job_id == 0) current_job.job_id = ++g_cur_job_id_count; //Put this in the background with the new handler
+        current_job.status = 2; //placeholder for stopped.
         g_bg_jobs.push_back(current_job);
+    }
+    else if(WIFCONTINUED(status)){
+        cout << "\nprocess" << pgid << "has continued" << endl;
+        current_job.status = 1; //placeholder for stopped.
     }
     else if(WIFSIGNALED(status)){
         n_exit_stat = 128 + WTERMSIG(status); // 130 is signal for SIGINT
@@ -297,11 +311,12 @@ bool cont_background(struct Job current_job){
         perror("SIGCONT FAILED"); //this is just a placeholder.
         return 0;
     } 
+    g_bg_jobs.push_back(current_job);
     return 1;
 }
 
 void update_jobs_list(){
-
+    
 }
 
 string status_mapping(int status){ //maybe make a map for this.
@@ -368,24 +383,17 @@ int external_cmd_call(vector<string> cmd, bool is_fg, string cmd_string){
         current_job.pid_list.push_back(pid);
         current_job.pgid = pid; //since we are going to have 1 process per job as for now.
         setpgid(pid,current_job.pgid);
-        current_job.job_id = g_cur_job_id_count++; //TODO: make this increase only for background process and also start at 1.
+         //TODO: make this increase only for background process and also start at 1.
         
         if(is_fg){
             g_fg_run = true; 
+            current_job.job_id = 0;
             n_exit_stat = to_foreground(current_job);
-        } else cont_background(current_job); 
-        /*
-        waitpid(pid, &status, WUNTRACED);
-        if(WIFEXITED(status)) n_exit_stat = WEXITSTATUS(status); 
-        else if(WIFSTOPPED(status)){
-            cout << "\nthe process has been stopped" << endl;
+        } else {
+            current_job.job_id = ++g_cur_job_id_count;
+            cont_background(current_job); 
         }
-        else if(WTERMSIG(status)){
-            n_exit_stat = 1; 
-            cout << "\nprocess " << pid << " has been terminated." << endl;
-        }
-        */
-
+        
     }
     g_fg_run = false; 
     return n_exit_stat %256;
