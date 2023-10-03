@@ -26,7 +26,7 @@ using namespace std;
 struct Job{
     int status;
     pid_t pgid; //same as leader
-    pid_t job_id;
+    int job_id;
     string cmd;
     vector<pid_t> pid_list;
 } ;
@@ -52,10 +52,12 @@ void backup_stdio(); //backup file descriptor of the original STDIO
 void restore_stdio(); //restore to STDIO
 
 int to_foreground(struct Job);
-bool to_background(struct Job);
+bool cont_background(struct Job);
 bool jobs_list();
 void update_jobs_list(); //TODO: Update this and make SIGCHLD to reap dead childs.
-string status_mapping(int status);
+string status_mapping(int);
+
+bool fgbg_cmd_get_job(string, struct Job &); // 0: not found, terminated; 1: found, the job input returns the current job.
 
 //-------------------- Signal-Related FN Forward Declaration --------------------
 void sigint_handler(int); //SIGINT handler
@@ -73,7 +75,7 @@ int STDOUT_FDESC; //Stores file descriptor for stdout
 int STDIN_FDESC; //Stores file descriptor for stdin
 
 int g_shell_pgid = 0;
-int g_cur_job_id_count = 0;
+int g_cur_job_id_count = 0; //we start with 0 but the first job starts with 1 like this ++counter;
 int g_job_done_count = 0;
 
 vector<struct Job> g_bg_jobs; //background group process/ jobs 
@@ -111,44 +113,57 @@ int main(int argc, char *argv[]){
 
 //-------------------- Command calls --------------------
 
-bool call_command(string inp){
-    bool exit = false;
-    int redir_index = -1,redir_type = -1;
-    string mod_inp;
+Command build_command(string inp, string& modded_input, vector<string>& cmd, bool& run_fg){
+    //initializing variables
+    int redir_index = -1,redir_type = -1; //redir index, type
+    bool redir, db_exist, run_fg_tmp; 
+    string tmp_mod_inp, filename;
+    vector<string> new_cmd, full_cmd; 
+    Command main_command = Command::EMPTY; 
 
-    bool db_exist = double_bang_mod(inp, mod_inp); //Check Double Bang
-    mod_inp.erase(remove(mod_inp.begin(), mod_inp.end(), '\n'), mod_inp.end());// Erase EOL
+    //Initial Clean-up
+    db_exist = double_bang_mod(inp, tmp_mod_inp); //Check Double Bang
+    tmp_mod_inp.erase(remove(tmp_mod_inp.begin(), tmp_mod_inp.end(), '\n'), tmp_mod_inp.end());// Erase EOL
+    if(tmp_mod_inp.empty()) return Command::EMPTY; //force return Command::EMPTY if command is empty
+    if(db_exist) cout << tmp_mod_inp << endl; //Repeat prompt if !! exist
+    g_prev_cmd = tmp_mod_inp; //Set previous command history
+
+    // Tokenize command
+    full_cmd = tokenize_cmd(tmp_mod_inp,redir_index,redir_type);
+
+    // Foreground Background checking
+    run_fg_tmp = (!full_cmd.empty() && full_cmd.back() == "&")? 0:1; //run command in fg check
+    if(!run_fg_tmp) full_cmd.pop_back();// remove & if exist, cmd set as bg
+
+    // Get command ENUM
+    if(!full_cmd.empty()) main_command = sto_cmd(full_cmd[0]); 
     
-    if(mod_inp.empty()) return false; //Re-prompt if empty command
-    if(db_exist) cout << mod_inp << endl; //Repeat prompt if !! exist
+    // Redirection checking
+    redir = split_cmd_IO(full_cmd, redir_index, redir_type, new_cmd, filename);
+    if(redir) if(IO_handle(filename,redir_type,1)) full_cmd = new_cmd;   
 
-    Command current = Command::EMPTY; //Set default enum to empty
-    vector<string> base_command = tokenize_cmd(mod_inp,redir_index,redir_type);  //tokenize command
+    modded_input = tmp_mod_inp;
+    cmd = full_cmd;
+    run_fg = run_fg_tmp;
 
-    bool run_fg = (!base_command.empty() && base_command.back() == "&")? 0:1; //check if we're running this new cmd in fg or bg group
-    if(!run_fg) base_command.pop_back();// remove & from the command 
+    return main_command;
+}
 
+bool call_command(string inp){
+    bool exit = false, run_fg = false;
+    string mod_inp;
+    vector<string> full_cmd;
+    Command main_cmd = build_command(inp, mod_inp, full_cmd, run_fg);
+    struct Job job_of_interest;
 
-    if(!base_command.empty()) current = sto_cmd(base_command[0]); //Get command ENUM
-    g_prev_cmd = mod_inp;
-
-    vector<string> new_cmd;
-    string filename;
-    bool redir = split_cmd_IO(base_command, redir_index, redir_type, new_cmd, filename);
-    if(redir){
-        if(IO_handle(filename,redir_type,1)) base_command = new_cmd;   
-    }
-
-    // ----> maybe make the code above another function? 
-
-    switch(current){    
-        case Command::ECHO: //Isolate io redirect only to echo.
-            echo(base_command);
+    switch(main_cmd){    
+        case Command::ECHO: 
+            echo(full_cmd);
             g_prev_exit = 0;
             break;
         
         case Command::EXIT:
-            exit = check_exit(base_command);
+            exit = check_exit(full_cmd);
             if(!exit) cout << "bad command"<< endl; 
             else return exit; //this is to prevent the final endl on as opposed to other calls.
             break;
@@ -161,7 +176,13 @@ bool call_command(string inp){
             break;
 
         case Command::BG:
-            cout << "bg called!" << endl;
+            if(full_cmd.size() != 2 ){
+                cout << "Invalid number of arguments!" << endl;   
+                break;
+            }
+            fgbg_cmd_get_job(full_cmd[1],job_of_interest);
+            cont_background(job_of_interest);
+            
             break;
 
         case Command::JOBS:
@@ -169,7 +190,7 @@ bool call_command(string inp){
             break;
 
         case Command::EXTERNAL:
-            g_prev_exit = external_cmd_call(base_command,run_fg, mod_inp);
+            g_prev_exit = external_cmd_call(full_cmd,run_fg,mod_inp);
     }
     restore_stdio();
     return exit;
@@ -258,11 +279,11 @@ int to_foreground(struct Job current_job){ //make in the cmd caller function to 
     if(WIFEXITED(status)) n_exit_stat = WEXITSTATUS(status); 
     else if(WIFSTOPPED(status)){
         cout << "\nthe process has been stopped" << endl;
-        n_exit_stat = -1;
+        n_exit_stat = 128 + WSTOPSIG(status); // 148 is signal for SIGTSTP
         g_bg_jobs.push_back(current_job);
     }
-    else if(WTERMSIG(status)){
-        n_exit_stat = 1; 
+    else if(WIFSIGNALED(status)){
+        n_exit_stat = 128 + WTERMSIG(status); // 130 is signal for SIGINT
         cout << "\nprocess " << pgid << " has been terminated." << endl;
     }
 
@@ -271,16 +292,19 @@ int to_foreground(struct Job current_job){ //make in the cmd caller function to 
     return n_exit_stat % 256;
 }
 
-bool to_background(struct Job current_job){
-    if(killpg(current_job.pgid, SIGCONT) < 0) perror("SIGCONT FAILED"); //this is just a placeholder.
-    return 0;
+bool cont_background(struct Job current_job){
+    if(killpg(current_job.pgid, SIGCONT) < 0){
+        perror("SIGCONT FAILED"); //this is just a placeholder.
+        return 0;
+    } 
+    return 1;
 }
 
 void update_jobs_list(){
 
 }
 
-string status_mapping(int status){
+string status_mapping(int status){ //maybe make a map for this.
     string stat_str;
     switch(status){
         default:
@@ -295,10 +319,29 @@ bool jobs_list(){
     }
     return 0;
 }
+
+bool fgbg_cmd_get_job(string inp, struct Job& j){
+    //Check if the input is valid
+    if(inp.size() < 2) return 0;
+    if(inp[0] != '%') return 0;
+    inp.erase(0,1);
+    for(char c: inp) if(!isdigit(c)) return 0;
+
+    int req_id = stoi(inp);
+    for(struct Job cur_j : g_bg_jobs){
+        if(cur_j.job_id == req_id){
+            j = cur_j;
+            return 1;
+        } 
+    }
+    return 0;
+}
+
+
 //-------------------- Process handling --------------------
 
 int external_cmd_call(vector<string> cmd, bool is_fg, string cmd_string){
-    int status, n_exit_stat = EXIT_FAILURE;
+    int n_exit_stat = EXIT_FAILURE; //status; //unused rn
     vector<string> new_cmd;
     string filename;
     
@@ -330,7 +373,7 @@ int external_cmd_call(vector<string> cmd, bool is_fg, string cmd_string){
         if(is_fg){
             g_fg_run = true; 
             n_exit_stat = to_foreground(current_job);
-        } else to_background(current_job);
+        } else cont_background(current_job); 
         /*
         waitpid(pid, &status, WUNTRACED);
         if(WIFEXITED(status)) n_exit_stat = WEXITSTATUS(status); 
@@ -345,7 +388,7 @@ int external_cmd_call(vector<string> cmd, bool is_fg, string cmd_string){
 
     }
     g_fg_run = false; 
-    return (n_exit_stat != -1)? n_exit_stat %256: n_exit_stat;
+    return n_exit_stat %256;
 }
 
 //-------------------- Script mode --------------------
