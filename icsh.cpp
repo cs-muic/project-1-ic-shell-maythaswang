@@ -413,11 +413,9 @@ struct Job* get_job_ptr(string inp, bool& status){
 struct Job* get_job_ptr(pid_t inp, bool& status){ 
     struct Job* j_ptr = NULL;
     status = 0;
-    for(struct Job& j: g_bg_jobs){ //Do this until proven invariant
-        if(j.job_id == inp && j.is_alive){
-            j_ptr = &j;
-            status = 1;
-        } 
+    if(!(inp < 1) && !(inp > (int)g_bg_jobs.size())){
+        j_ptr = &g_bg_jobs[inp-1];
+        status = 1;
     }
     return j_ptr;
 }
