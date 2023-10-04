@@ -71,7 +71,7 @@ int job_wait(struct Job*);                                                  // T
 void sigint_handler(int);                                                   // SIGINT handler
 void sigtstp_handler(int);                                                  // SIGTSTP handler
 void sigchld_handler(int);                                                  // SIGCHLD handler
-int job_status_signal(struct Job*, int);                                   // TODO: Implement this as a part of refactoring code.
+int job_status_signal(struct Job*, int);                                    // TODO: Implement this as a part of refactoring code.
 
 //-------------------- Global var init --------------------
 std::map<std::string, Command> g_cmd_map;                                   // String to command Enumerator Map.
