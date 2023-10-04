@@ -57,6 +57,7 @@ int to_foreground(struct Job*, bool);                                       // T
 bool cont_background(struct Job*, bool);                                    // Sends or spawn a command to background. Call IFF get_job_ptr status is true.
 bool jobs_list();                                                           // Show list of jobs that are still alive
 void update_jobs_list();                                                    // Update the jobs list.
+string get_status_string(int);                                              // Return the status according to the state or the job if exist. Otherwise EXIT <status number>.
 
 void populate_map_status_to_string();                                       // Populating the status<int> to string map. 
 struct Job* get_job_ptr(string, bool& );                                    // Returns a pointer the current job. args[0]: cmd input<string>, args[1]: status
@@ -70,7 +71,7 @@ int job_wait(struct Job*);                                                  // T
 void sigint_handler(int);                                                   // SIGINT handler
 void sigtstp_handler(int);                                                  // SIGTSTP handler
 void sigchld_handler(int);                                                  // SIGCHLD handler
-void job_status_signal(struct Job*, int);                                   // TODO: Implement this as a part of refactoring code.
+int job_status_signal(struct Job*, int);                                   // TODO: Implement this as a part of refactoring code.
 
 //-------------------- Global var init --------------------
 std::map<std::string, Command> g_cmd_map;                                   // String to command Enumerator Map.
@@ -280,48 +281,44 @@ void sigtstp_handler(int sig){
 void sigchld_handler(int sig){
     struct Job* current_job;
     bool found_job;
-    int n_exit_stat,status;
+    int status;
     pid_t pgid;
     while( (pgid = waitpid(-1, &status, WNOHANG)) > 0){
-    //This check if ANY process in a particular pg died (since we have only 1 its ok to do this.)
+    // This check if ANY process in a particular pg died (since we have only 1 its ok to do this.)
         current_job = get_job_ptr(pgid,found_job,1);
-
-        if(found_job){
-            if(WIFEXITED(status)){
-                n_exit_stat = WEXITSTATUS(status); 
-                current_job -> status = 1; // Done
-                current_job -> is_alive = 0;
-            } else if(WIFSTOPPED(status)) {
-                cout << "\nthe process has been stopped" << endl; // TODO: change message.
-                n_exit_stat = 128 + WSTOPSIG(status); // 148 is signal for SIGTSTP
-                current_job -> status = 3; // Stopped signals
-                
-                if(current_job -> job_id == 0) {
-                    current_job -> job_id = ++g_cur_job_id_count; //Put this in the background with the new handler
-                    current_job -> has_bg = 1; //Throw the process to background
-                    g_bg_jobs.push_back(*current_job);
-                }
-
-            } else if(WIFCONTINUED(status)) {
-                cout << "\nprocess" << pgid << "has continued" << endl; // TODO: change message.
-                current_job -> status = 1; //placeholder for stopped.
-
-            } else if(WIFSIGNALED(status)) {
-                n_exit_stat = 128 + WTERMSIG(status); 
-                if(n_exit_stat == 130) current_job -> status = 2; // SIGINT
-                else if(n_exit_stat == 137) current_job -> status = 4; // SIGKILL
-                else current_job -> status = 5; //other method
-                current_job -> is_alive = 0;
-
-                cout << "\nprocess " << pgid << " has been terminated." << endl; // TODO: change message.
-            }
-        }
+        if(found_job) job_status_signal(current_job, status);
     }
     
 }
 
-void job_status_signal(struct Job* current_job, int status){
+int job_status_signal(struct Job* current_job, int status){
+    int n_exit_stat;
+    if(WIFEXITED(status)){
+        n_exit_stat = WEXITSTATUS(status); 
+        current_job -> status = 1; // Done
+        current_job -> is_alive = 0;
+    } else if(WIFSTOPPED(status)) {
+        n_exit_stat = 128 + WSTOPSIG(status); // 148 SIGTSTP
+        current_job -> status = 3; // STOPPED signals
 
+        if(current_job -> job_id == 0) {
+            current_job -> job_id = ++g_cur_job_id_count; //Put this job in the background with the new job_id
+            current_job -> has_bg = 1; //Throw the process to background
+            g_bg_jobs.push_back(*current_job);
+        }
+        cout << "[" << current_job -> job_id << "] " << get_status_string(current_job -> status) << "\t\t" << current_job -> cmd << endl;        
+
+    } else if(WIFCONTINUED(status)) {
+        current_job -> status = 1; 
+
+    } else if(WIFSIGNALED(status)) {
+        n_exit_stat = 128 + WTERMSIG(status); 
+        if(n_exit_stat == 130) current_job -> status = 2; // SIGINT
+        else if(n_exit_stat == 137) current_job -> status = 4; // SIGKILL
+        else current_job -> status = n_exit_stat; //other method
+        current_job -> is_alive = 0;
+    }
+    return n_exit_stat %256;
 }
 
 //-------------------- Jobs control --------------------
@@ -330,36 +327,7 @@ int job_wait(struct Job* current_job){
     int n_exit_stat= EXIT_FAILURE, status;
 
     waitpid(-pgid, &status, WUNTRACED); //This check if ANY process in a particular pg died (since we have only 1 its ok to do this.)
-            
-    if(WIFEXITED(status)){
-        n_exit_stat = WEXITSTATUS(status); 
-        current_job -> status = 1; // Done
-        current_job -> is_alive = 0;
-    } else if(WIFSTOPPED(status)) {
-        cout << "\nthe process has been stopped" << endl; // TODO: change message.
-        n_exit_stat = 128 + WSTOPSIG(status); // 148 is signal for SIGTSTP
-        current_job -> status = 3; // Stopped signals
-        
-        if(current_job -> job_id == 0) {
-            current_job -> job_id = ++g_cur_job_id_count; //Put this in the background with the new handler
-            current_job -> has_bg = 1; //Throw the process to background
-            g_bg_jobs.push_back(*current_job);
-        }
-
-    } else if(WIFCONTINUED(status)) {
-        cout << "\nprocess" << pgid << "has continued" << endl; // TODO: change message.
-        current_job -> status = 1; //placeholder for stopped.
-
-    } else if(WIFSIGNALED(status)) {
-        n_exit_stat = 128 + WTERMSIG(status); 
-        if(n_exit_stat == 130) current_job -> status = 2; // SIGINT
-        else if(n_exit_stat == 137) current_job -> status = 4; // SIGKILL
-        else current_job -> status = 5; //other method
-        current_job -> is_alive = 0;
-
-        cout << "\nprocess " << pgid << " has been terminated." << endl; // TODO: change message.
-    }
-
+    n_exit_stat = job_status_signal(current_job,status);
     return n_exit_stat % 256;
 }
 
@@ -389,8 +357,7 @@ bool cont_background(struct Job* current_job, bool cont){
     current_job -> has_bg = 1;
     if(cont){
         if(current_job -> status == 3 && killpg(current_job -> pgid, SIGCONT) < 0){
-            perror("SIGCONT FAILED"); //this is just a placeholder.
-            cout << "signal_failed";
+            perror("SIGCONT FAILED"); // This is just a placeholder.
             return 0;
         } else {
             current_job -> status = 0;
@@ -398,6 +365,7 @@ bool cont_background(struct Job* current_job, bool cont){
         }
     } else { // This means this is a newly created job.
         current_job -> status = 0;
+        cout << "[" << current_job -> job_id << "] " << current_job -> pgid << endl;
         g_bg_jobs.push_back(*current_job);
     }
     
@@ -409,7 +377,7 @@ void update_jobs_list(){
         if (!j.checked && !j.is_alive){
             g_job_unalive_count++;
             j.checked = 1;
-            cout << "[" << j.job_id << "] " << g_status_string_map[j.status] << "\t\t" << j.cmd << endl;
+            cout << "[" << j.job_id << "] " << get_status_string(j.status) << "\t\t" << j.cmd << endl;
         } 
     }
 
@@ -423,7 +391,7 @@ void update_jobs_list(){
 bool jobs_list(){
     for(struct Job& j : g_bg_jobs){
         if(!j.checked){
-            cout << "[" << j.job_id << "] " << g_status_string_map[j.status] << "\t\t" << j.cmd;
+            cout << "[" << j.job_id << "] " << get_status_string(j.status) << "\t\t" << j.cmd;
             if(j.status == 0) cout <<" &";
             cout << endl;
         }
@@ -432,10 +400,11 @@ bool jobs_list(){
 }
 
 struct Job* get_job_ptr(string inp, bool& status){
-    if(inp.size() < 2) return 0;
-    if(inp[0] != '%') return 0;
+    status = 0;
+    if(inp.size() < 2) return NULL;
+    if(inp[0] != '%') return NULL;
     inp.erase(0,1);
-    for(char c: inp) if(!isdigit(c)) return 0;
+    for(char c: inp) if(!isdigit(c)) return NULL;
     int req_id = stoi(inp);
 
     return get_job_ptr(req_id, status);
@@ -445,7 +414,7 @@ struct Job* get_job_ptr(pid_t inp, bool& status){
     struct Job* j_ptr = NULL;
     status = 0;
     for(struct Job& j: g_bg_jobs){ //Do this until proven invariant
-        if(j.job_id == inp){
+        if(j.job_id == inp && j.is_alive){
             j_ptr = &j;
             status = 1;
         } 
@@ -457,12 +426,16 @@ struct Job* get_job_ptr(pid_t inp, bool& status, bool is_gpid){
     struct Job* j_ptr = NULL;
     status = 0;
     for(struct Job& j: g_bg_jobs){
-        if(j.pgid == inp){
+        if(j.pgid == inp && j.is_alive){
             j_ptr = &j;
             status = 1;
         } 
     }
     return j_ptr;
+}
+string get_status_string(int status){
+    string rtn = "EXIT ";
+    return (g_status_string_map.find(status) != g_status_string_map.end())? g_status_string_map[status] : rtn.append(to_string(status));
 }
 
 void populate_map_status_to_string(){
@@ -471,7 +444,6 @@ void populate_map_status_to_string(){
     g_status_string_map[2] = "Interrupted"; // SIGINT
     g_status_string_map[3] = "Stopped"; // STOP signals
     g_status_string_map[4] = "Killed"; // SIGKILL
-    g_status_string_map[5] = "Terminated by some other methodology"; // TODO: find a better message
 }
 
 
