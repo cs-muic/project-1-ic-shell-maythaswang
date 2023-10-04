@@ -61,10 +61,12 @@ void update_jobs_list(); //TODO: Update this and make SIGCHLD to reap dead child
 void populate_map_status_to_string(); // Populating Status<int> to string map.
 struct Job* get_job_ptr(string, bool& ); // returns pointer to that current job, args[0]: cmd input, args[1]: status
 struct Job* get_job_ptr(int, bool&); // returns pointer to that current job, args[0]: requested job_id, args[1]: status
+struct Job* get_job_ptr(pid_t,bool&,bool); //search with pgid.
 
 //-------------------- Signal-Related FN Forward Declaration --------------------
 void sigint_handler(int); //SIGINT handler
 void sigtstp_handler(int); //SIGTSTP handler
+void sigchld_handler(int);
 //TODO: Handle zombie process and child reaping.
 
 //-------------------- Global var init --------------------
@@ -94,20 +96,19 @@ int main(int argc, char *argv[]){
     populate_map_status_to_string();
 
     g_shell_pgid = getpgid(0); //get the pid of the shell and store it beforehand.
-    cout << g_shell_pgid << endl; //debug
 
     signal(SIGINT, sigint_handler);
     signal(SIGTSTP, sigtstp_handler);
     signal(SIGTTIN, SIG_IGN);
     signal(SIGTTOU, SIG_IGN);
+    signal(SIGCHLD, sigchld_handler);
     backup_stdio();
     
     if (argc > 1) {
         script_mode(argc, argv);
     } else { 
         cout << "Starting IC shell"<<endl;
-        while (!exit) {
-            cout << g_cur_job_id_count;
+        while (!exit) { 
             update_jobs_list(); //update joblist before every prompt.
             printf("icsh $ ");
             string inp = fgets(buffer, 255, stdin); 
@@ -285,6 +286,49 @@ void sigtstp_handler(int sig){
 }
 
 void sigchld_handler(int sig){
+    struct Job* current_job;
+    bool found_job;
+    int n_exit_stat,status;
+    pid_t pgid;
+    while( (pgid = waitpid(-1, &status, WNOHANG)) > 0){
+    //This check if ANY process in a particular pg died (since we have only 1 its ok to do this.)
+        current_job = get_job_ptr(pgid,found_job,1);
+
+        if(found_job){
+            if(WIFEXITED(status)){
+                n_exit_stat = WEXITSTATUS(status); 
+                current_job -> status = 1; // Done
+                current_job -> is_alive = 0;
+            } else if(WIFSTOPPED(status)) {
+                cout << "\nthe process has been stopped" << endl;
+                n_exit_stat = 128 + WSTOPSIG(status); // 148 is signal for SIGTSTP
+                current_job -> status = 3; // Stopped signals
+                
+                if(current_job -> job_id == 0) {
+                    current_job -> job_id = ++g_cur_job_id_count; //Put this in the background with the new handler
+                    current_job -> has_bg = 1; //Throw the process to background
+                    g_bg_jobs.push_back(*current_job);
+                }
+
+            } else if(WIFCONTINUED(status)) {
+                cout << "\nprocess" << pgid << "has continued" << endl;
+                current_job -> status = 1; //placeholder for stopped.
+
+            } else if(WIFSIGNALED(status)) {
+                n_exit_stat = 128 + WTERMSIG(status); 
+                if(n_exit_stat == 130) current_job -> status = 2; // SIGINT
+                else if(n_exit_stat == 137) current_job -> status = 4; // SIGKILL
+                else current_job -> status = 5; //other method
+                current_job -> is_alive = 0;
+
+                cout << "\nprocess " << pgid << " has been terminated." << endl;
+            }
+        }
+    }
+    
+}
+
+void job_status_signal(struct Job* current_job, int status){
 
 }
 
@@ -298,6 +342,7 @@ int job_wait(struct Job* current_job){
     if(WIFEXITED(status)){
         n_exit_stat = WEXITSTATUS(status); 
         current_job -> status = 1; // Done
+        current_job -> is_alive = 0;
     } else if(WIFSTOPPED(status)) {
         cout << "\nthe process has been stopped" << endl;
         n_exit_stat = 128 + WSTOPSIG(status); // 148 is signal for SIGTSTP
@@ -369,7 +414,6 @@ bool cont_background(struct Job* current_job, bool cont){
 
 
 void update_jobs_list(){
-    //call this at before each terminal loop start. Use queue to queue up the dead process string.
     for(struct Job& j: g_bg_jobs){
         if (!j.checked && !j.is_alive){
             g_job_unalive_count++;
@@ -420,6 +464,18 @@ struct Job* get_job_ptr(pid_t inp, bool& status){ //Do this until proven invaria
     return j_ptr;
 }
 
+struct Job* get_job_ptr(pid_t inp, bool& status, bool is_gpid){ //Do this until proven invariant
+    struct Job* j_ptr = NULL;
+    status = 0;
+    for(struct Job& j: g_bg_jobs){
+        if(j.pgid == inp){
+            j_ptr = &j;
+            status = 1;
+        } 
+    }
+    return j_ptr;
+}
+
 void populate_map_status_to_string(){
     g_status_string_map[0] = "Running";    
     g_status_string_map[1] = "Done";
@@ -434,7 +490,6 @@ void populate_map_status_to_string(){
 
 int external_cmd_call(vector<string> cmd, bool is_fg, string cmd_string){
     int n_exit_stat = EXIT_FAILURE; //status; //unused rn
-    bool found_procecss = 0;
     vector<string> new_cmd;
     string filename;
     
@@ -469,18 +524,15 @@ int external_cmd_call(vector<string> cmd, bool is_fg, string cmd_string){
     } else {
         current_job.pid_list.push_back(pid);
         current_job.pgid = pid; //since we are going to have 1 process per job as for now.
-        setpgid(pid,current_job.pgid);
-         //TODO: make this increase only for background process and also start at 1.
+        setpgid(pid,current_job.pgid); 
         
         if(is_fg){
             current_job.job_id = 0;
             j_ptr = &current_job;
-            g_fg_run = true; //show that there is a fg process running
+            g_fg_run = true; //mark that there is a foreground process running.
             n_exit_stat = to_foreground(j_ptr, 0);
         } else {
             current_job.job_id = ++g_cur_job_id_count;
-            //g_bg_jobs.push_back(current_job);
-            //j_ptr = get_job_ptr(current_job.job_id,found_procecss); //this is extremely redundant but for the sake of completion it will be here for now.
             j_ptr = &current_job;
             cont_background(j_ptr,0); 
         }
