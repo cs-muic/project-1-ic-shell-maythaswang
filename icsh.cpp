@@ -53,7 +53,7 @@ void backup_stdio();                                                        // B
 void restore_stdio();                                                       // Restore to STDIO
 
 //-------------------- Job Control-Related FN Forward Declaration. --------------------
-int to_foreground(struct Job*, bool);                                       // TODO: Check if SIGCONT is handled correctly. Sends or spawn a command to foreground. Call IFF get_job_ptr status is true.
+int to_foreground(struct Job*, bool);                                       // Sends or spawn a command to foreground. Call IFF get_job_ptr status is true.
 bool cont_background(struct Job*, bool);                                    // Sends or spawn a command to background. Call IFF get_job_ptr status is true.
 bool jobs_list();                                                           // Show list of jobs that are still alive
 void update_jobs_list();                                                    // Update the jobs list.
@@ -64,14 +64,14 @@ struct Job* get_job_ptr(string, bool& );                                    // R
 struct Job* get_job_ptr(int, bool&);                                        // Returns a pointer the current job. args[0]: requested job_id<int>, args[1]: status
 struct Job* get_job_ptr(pid_t,bool&,bool);                                  // Returns a pointer the current job. args[0]: pid, args[1]: status, args[2]: is_pid<boolean>
 
-int job_wait(struct Job*);                                                  // TODO: Split this function as part of code refactoring. Wait for the state of the current job. Returns the exit status %256.         
+int job_wait(struct Job*);                                                  // Wait for the state of the current job. Returns the exit status %256.         
 
 //-------------------- Signal-Related FN Forward Declaration --------------------
 
 void sigint_handler(int);                                                   // SIGINT handler
 void sigtstp_handler(int);                                                  // SIGTSTP handler
 void sigchld_handler(int);                                                  // SIGCHLD handler
-int job_status_signal(struct Job*, int);                                    // TODO: Implement this as a part of refactoring code.
+int job_status_signal(struct Job*, int);                                    // Handle what to do when each job returns their statuses
 
 //-------------------- Global var init --------------------
 std::map<std::string, Command> g_cmd_map;                                   // String to command Enumerator Map.
