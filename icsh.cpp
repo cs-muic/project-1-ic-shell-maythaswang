@@ -27,8 +27,7 @@ struct Job{
     int status;
     pid_t pgid; //same as leader
     int job_id;
-    bool is_alive;
-    bool checked;
+    bool is_alive, checked, has_bg;
     string cmd;
     vector<pid_t> pid_list;
 } ;
@@ -53,13 +52,15 @@ bool split_cmd_IO(vector<string> , int , int , vector<string>& , string&); //Spl
 void backup_stdio(); //backup file descriptor of the original STDIO
 void restore_stdio(); //restore to STDIO
 
-int to_foreground(struct Job);
-bool cont_background(struct Job);
+
+int to_foreground(struct Job*, bool);
+bool cont_background(struct Job*, bool);
 bool jobs_list();
 void update_jobs_list(); //TODO: Update this and make SIGCHLD to reap dead childs.
-string status_mapping(int);
 
-bool fgbg_cmd_get_job(string, struct Job &); // 0: not found, terminated; 1: found, the job input returns the current job.
+void populate_map_status_to_string(); // Populating Status<int> to string map.
+struct Job* get_job_ptr(string, bool& ); // returns pointer to that current job, args[0]: cmd input, args[1]: status
+struct Job* get_job_ptr(int, bool&); // returns pointer to that current job, args[0]: requested job_id, args[1]: status
 
 //-------------------- Signal-Related FN Forward Declaration --------------------
 void sigint_handler(int); //SIGINT handler
@@ -68,6 +69,7 @@ void sigtstp_handler(int); //SIGTSTP handler
 
 //-------------------- Global var init --------------------
 std::map<std::string, Command> g_cmd_map;
+std::map<int, std::string> g_status_string_map;
 string g_prev_cmd;
 unsigned short g_prev_exit = 0;
 pid_t g_pid = 0; //Temporary variable to store foreground process PID in Milestone 3
@@ -89,6 +91,7 @@ int main(int argc, char *argv[]){
     char buffer[MAX_CMD_BUFFER]; //maybe modify tokenizer to make it handle flags easier?
     bool exit = false;
     populate_map_cmd();
+    populate_map_status_to_string();
 
     g_shell_pgid = getpgid(0); //get the pid of the shell and store it beforehand.
     cout << g_shell_pgid << endl; //debug
@@ -112,6 +115,7 @@ int main(int argc, char *argv[]){
         }
     }
 
+    update_jobs_list(); //One final call
     return g_prev_exit;
 }
 
@@ -140,7 +144,7 @@ Command build_command(string inp, string& modded_input, vector<string>& cmd, boo
     run_fg_tmp = (!full_cmd.empty() && full_cmd.back() == "&")? 0:1; //run command in fg check
     if(!run_fg_tmp){
         full_cmd.pop_back();// remove & if exist, cmd set as bg
-        tmp_mod_inp.pop_back();// remove & from original command.
+        //tmp_mod_inp.pop_back();// remove & from original command.
     }
 
     // Get command ENUM
@@ -150,6 +154,11 @@ Command build_command(string inp, string& modded_input, vector<string>& cmd, boo
     redir = split_cmd_IO(full_cmd, redir_index, redir_type, new_cmd, filename);
     if(redir) if(IO_handle(filename,redir_type,1)) full_cmd = new_cmd;   
 
+    // rebuilding modded input
+    tmp_mod_inp = "";
+    for(string s: full_cmd){ tmp_mod_inp.append(s).append(" ");}
+    if(!tmp_mod_inp.empty()) tmp_mod_inp.pop_back();
+
     modded_input = tmp_mod_inp;
     cmd = full_cmd;
     run_fg = run_fg_tmp;
@@ -158,11 +167,11 @@ Command build_command(string inp, string& modded_input, vector<string>& cmd, boo
 }
 
 bool call_command(string inp){
-    bool exit = false, run_fg = false;
+    bool exit = false, run_fg = false, valid_job_id = false;
     string mod_inp;
     vector<string> full_cmd;
     Command main_cmd = build_command(inp, mod_inp, full_cmd, run_fg);
-    struct Job job_of_interest;
+    struct Job* joi;
 
     switch(main_cmd){    
         case Command::ECHO: 
@@ -184,9 +193,10 @@ bool call_command(string inp){
                 cout << "Invalid number of arguments!" << endl;   
                 break;
             }
-            if(fgbg_cmd_get_job(full_cmd[1],job_of_interest)) to_foreground(job_of_interest);
+            joi = get_job_ptr(full_cmd[1],valid_job_id);
+            if(valid_job_id) g_prev_exit = to_foreground(joi,1);
             else cout << "Invalid job id." << endl;
-
+            
             break;
 
         case Command::BG:
@@ -194,8 +204,10 @@ bool call_command(string inp){
                 cout << "Invalid number of arguments!" << endl;   
                 break;
             }
-            if(fgbg_cmd_get_job(full_cmd[1],job_of_interest))cont_background(job_of_interest);
+            joi = get_job_ptr(full_cmd[1],valid_job_id);
+            if(valid_job_id) cont_background(joi,1);
             else cout << "Invalid job id." << endl;
+            
             break;
 
         case Command::JOBS:
@@ -275,62 +287,94 @@ void sigtstp_handler(int sig){
 void sigchld_handler(int sig){
 
 }
+
 //-------------------- Jobs control --------------------
-void job_wait(){
-    
-}
+int job_wait(struct Job* current_job){
+    pid_t pgid = current_job -> pgid;
+    int n_exit_stat= EXIT_FAILURE, status;
 
-int to_foreground(struct Job current_job){ //this must be called iff fgbg_cmd_get_job returns true or when spawining new process. Make handler to check if sigcont is necessary based on where its called. 
-    int status, n_exit_stat = EXIT_FAILURE;
-    pid_t pgid = current_job.pgid;
-    tcsetpgrp(0,pgid);
-    g_fg_pgid = pgid;
-
-    if(killpg(pgid, SIGCONT) < 0){ //SIGCONT check here
-        perror("SIGCONT FAILED"); //this is just a placeholder. 
-    } 
-
-    waitpid(pgid, &status, WUNTRACED);
-        
-    if(WIFEXITED(status)) n_exit_stat = WEXITSTATUS(status); 
-    else if(WIFSTOPPED(status)){
+    waitpid(-pgid, &status, WUNTRACED); //This check if ANY process in a particular pg died (since we have only 1 its ok to do this.)
+            
+    if(WIFEXITED(status)){
+        n_exit_stat = WEXITSTATUS(status); 
+        current_job -> status = 1; // Done
+    } else if(WIFSTOPPED(status)) {
         cout << "\nthe process has been stopped" << endl;
         n_exit_stat = 128 + WSTOPSIG(status); // 148 is signal for SIGTSTP
+        current_job -> status = 3; // Stopped signals
         
-        if(current_job.job_id == 0) current_job.job_id = ++g_cur_job_id_count; //Put this in the background with the new handler
-        current_job.status = 2; //placeholder for stopped.
-        g_bg_jobs.push_back(current_job);
-    }
-    else if(WIFCONTINUED(status)){
+        if(current_job -> job_id == 0) {
+            current_job -> job_id = ++g_cur_job_id_count; //Put this in the background with the new handler
+            current_job -> has_bg = 1; //Throw the process to background
+            g_bg_jobs.push_back(*current_job);
+        }
+
+    } else if(WIFCONTINUED(status)) {
         cout << "\nprocess" << pgid << "has continued" << endl;
-        current_job.status = 1; //placeholder for stopped.
-    }
-    else if(WIFSIGNALED(status)){
-        n_exit_stat = 128 + WTERMSIG(status); // 130 is signal for SIGINT
+        current_job -> status = 1; //placeholder for stopped.
+
+    } else if(WIFSIGNALED(status)) {
+        n_exit_stat = 128 + WTERMSIG(status); 
+        if(n_exit_stat == 130) current_job -> status = 2; // SIGINT
+        else if(n_exit_stat == 137) current_job -> status = 4; // SIGKILL
+        else current_job -> status = 5; //other method
+        current_job -> is_alive = 0;
+
         cout << "\nprocess " << pgid << " has been terminated." << endl;
     }
 
-    g_fg_pgid = -1;
-    tcsetpgrp (0, g_shell_pgid);
     return n_exit_stat % 256;
 }
 
-bool cont_background(struct Job current_job){
-    if(killpg(current_job.pgid, SIGCONT) < 0){
-        perror("SIGCONT FAILED"); //this is just a placeholder.
-        return 0;
-    } 
-    g_bg_jobs.push_back(current_job);
+int to_foreground(struct Job* current_job, bool cont){ //this must be called iff fgbg_cmd_get_job returns true or when spawining new process. Make handler to check if sigcont is necessary based on where its called. 
+    int n_exit_stat = EXIT_FAILURE;
+    pid_t pgid = current_job -> pgid;
+    
+    tcsetpgrp(0,pgid);
+    g_fg_pgid = pgid;
+
+    if(cont){ //if continue then the process must be called from background
+        if(current_job -> status == 3 && killpg(pgid, SIGCONT) < 0) perror("SIGCONT FAILED"); //this is just a placeholder. 
+        cout << current_job -> cmd << endl;
+    } else {
+        current_job -> has_bg = 0;
+    }
+    current_job -> status = 0;
+
+    n_exit_stat = job_wait(current_job);
+
+    g_fg_pgid = -1;
+    tcsetpgrp (0, g_shell_pgid);
+    return n_exit_stat;
+}
+
+bool cont_background(struct Job* current_job, bool cont){
+    current_job -> has_bg = 1;
+    if(cont){
+        if(current_job -> status == 3 && killpg(current_job -> pgid, SIGCONT) < 0){
+            perror("SIGCONT FAILED"); //this is just a placeholder.
+            cout << "signal_failed";
+            return 0;
+        } else {
+            current_job -> status = 0;
+            cout << "[" << current_job -> job_id << "] " << current_job -> cmd << " &"  << endl;
+        }
+    } else { // This means this is a newly created job.
+        current_job -> status = 0;
+        g_bg_jobs.push_back(*current_job);
+    }
+    
     return 1;
 }
 
+
 void update_jobs_list(){
     //call this at before each terminal loop start. Use queue to queue up the dead process string.
-    for(struct Job j: g_bg_jobs){
+    for(struct Job& j: g_bg_jobs){
         if (!j.checked && !j.is_alive){
             g_job_unalive_count++;
             j.checked = 1;
-            cout << "[" << j.job_id << "] " << status_mapping(j.status) << "\t\t" << j.cmd << endl;
+            cout << "[" << j.job_id << "] " << g_status_string_map[j.status] << "\t\t" << j.cmd << endl;
         } 
     }
 
@@ -341,23 +385,18 @@ void update_jobs_list(){
     } 
 }
 
-string status_mapping(int status){ //maybe make a map for this.
-    string stat_str;
-    switch(status){
-        default:
-            stat_str = "Running";
-    }
-    return stat_str;        
-}
-
 bool jobs_list(){
-    for(struct Job j : g_bg_jobs){
-        cout << "[" << j.job_id << "] " << status_mapping(j.status) << "\t\t" << j.cmd << endl;
+    for(struct Job& j : g_bg_jobs){
+        if(!j.checked){
+            cout << "[" << j.job_id << "] " << g_status_string_map[j.status] << "\t\t" << j.cmd;
+            if(j.status == 0) cout <<" &";
+            cout << endl;
+        }
     }
     return 0;
 }
 
-bool fgbg_cmd_get_job(string inp, struct Job& j){
+struct Job* get_job_ptr(string inp, bool& status){
     //Check if the input is valid
     if(inp.size() < 2) return 0;
     if(inp[0] != '%') return 0;
@@ -365,19 +404,37 @@ bool fgbg_cmd_get_job(string inp, struct Job& j){
     for(char c: inp) if(!isdigit(c)) return 0;
 
     int req_id = stoi(inp);
-    for(struct Job cur_j : g_bg_jobs){
-        if(cur_j.job_id == req_id){
-            j = cur_j;
-            return 1;
+
+    return get_job_ptr(req_id, status);
+}
+
+struct Job* get_job_ptr(pid_t inp, bool& status){ //Do this until proven invariant
+    struct Job* j_ptr = NULL;
+    status = 0;
+    for(struct Job& j: g_bg_jobs){
+        if(j.job_id == inp){
+            j_ptr = &j;
+            status = 1;
         } 
     }
-    return 0;
+    return j_ptr;
 }
+
+void populate_map_status_to_string(){
+    g_status_string_map[0] = "Running";    
+    g_status_string_map[1] = "Done";
+    g_status_string_map[2] = "Interrupted"; // SIGINT
+    g_status_string_map[3] = "Stopped"; // STOP signals
+    g_status_string_map[4] = "Killed"; // SIGKILL
+    g_status_string_map[5] = "Terminated by some other methodology"; // TODO: find a better message
+}
+
 
 //-------------------- Process handling --------------------
 
 int external_cmd_call(vector<string> cmd, bool is_fg, string cmd_string){
     int n_exit_stat = EXIT_FAILURE; //status; //unused rn
+    bool found_procecss = 0;
     vector<string> new_cmd;
     string filename;
     
@@ -385,9 +442,17 @@ int external_cmd_call(vector<string> cmd, bool is_fg, string cmd_string){
     for(unsigned int i = 0; i < cmd.size(); i++){
         argv[i] = const_cast<char*>(cmd[i].c_str());
     }   
+
+    //Create new job
     struct Job current_job;
+    struct Job* j_ptr;
+
+    //Clean up command
+
     current_job.cmd = cmd_string;
     current_job.is_alive = 1;
+    current_job.checked = 0;
+    current_job.has_bg = 0;
 
     pid_t pid = fork();
 
@@ -408,12 +473,16 @@ int external_cmd_call(vector<string> cmd, bool is_fg, string cmd_string){
          //TODO: make this increase only for background process and also start at 1.
         
         if(is_fg){
-            g_fg_run = true; 
             current_job.job_id = 0;
-            n_exit_stat = to_foreground(current_job);
+            j_ptr = &current_job;
+            g_fg_run = true; //show that there is a fg process running
+            n_exit_stat = to_foreground(j_ptr, 0);
         } else {
             current_job.job_id = ++g_cur_job_id_count;
-            cont_background(current_job); 
+            //g_bg_jobs.push_back(current_job);
+            //j_ptr = get_job_ptr(current_job.job_id,found_procecss); //this is extremely redundant but for the sake of completion it will be here for now.
+            j_ptr = &current_job;
+            cont_background(j_ptr,0); 
         }
 
     }
