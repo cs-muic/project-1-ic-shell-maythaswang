@@ -22,6 +22,8 @@
 
 using namespace std;
 
+// The comments shown in the left during in forward declaration section is only a tldr version of what each variable/functions do. For extra details please check README.
+
 //-------------------- Structs --------------------
 
 struct Job{                                                                 // Job Struct
@@ -34,7 +36,7 @@ struct Job{                                                                 // J
 } ;
 
 //-------------------- Enumerators --------------------
-enum class Command {ECHO, EXIT, EXTERNAL, EMPTY, FG, BG, JOBS};             // Enumerator for build-in commands
+enum class Command {ECHO, EXIT, EXTERNAL, EMPTY, FG, BG, JOBS, CD, HELP};   // Enumerator for build-in commands
 
 //-------------------- Function Forward Declaration. --------------------
 void populate_map_cmd();                                                    // Populate the string to command map. 
@@ -50,6 +52,9 @@ bool IO_handle(string, int, bool);                                          // H
 bool split_cmd_IO(vector<string> , int , int , vector<string>& , string&);  // Split original command into new_command and filename. Returns whether redir is required.
 void backup_stdio();                                                        // Backup file descriptor of the original STDIO
 void restore_stdio();                                                       // Restore to STDIO
+
+void change_dir(vector<string>);                                            // cd command with handle for ~  <- EXTRA!
+void help();                                                                // show lists of command syntaxes and statuses <- EXTRA!
 
 //-------------------- Job Control-Related FN Forward Declaration. --------------------
 int to_foreground(struct Job*, bool);                                       // Sends or spawn a command to foreground. Call IFF get_job_ptr status is true.
@@ -210,6 +215,16 @@ bool call_command(string inp){
 
         case Command::JOBS:
             jobs_list();
+            break;
+
+        case Command::CD:
+            g_prev_exit = 0;
+            change_dir(full_cmd);
+            break;
+        
+        case Command::HELP:
+            g_prev_exit = 0;
+            help();
             break;
 
         case Command::EXTERNAL:
@@ -549,6 +564,45 @@ bool check_exit(vector<string> &cmd){
     return exit;
 }
 
+void change_dir(vector<string> cmd){ //cd <- Extra function!
+    if (cmd.size() > 2){
+        cout << "Invalid number of arguments" << endl;
+        g_prev_exit = 2;
+
+    } else if (cmd.size() == 1 || cmd[1] == "~"){
+        if(chdir(getenv("HOME")) == -1){
+            g_prev_exit = 2;
+            perror("Invalid directory");
+        }
+    } else if(chdir(const_cast<char*>(cmd[1].c_str())) == -1){ //0 : working, -1 : fail
+        g_prev_exit = 2;
+        perror("Invalid directory");
+    }
+}
+
+void help(){
+    cout << "-------------------------------------- SYNTAXES --------------------------------------" << endl;
+    cout << "echo <text>    : Prints the <text> to the console." << endl;
+    cout << "echo $?        : Prints out the previous exit status to the console." << endl;
+    cout << "exit <num>     : Exit the shell with the exit value as <num>." << endl;
+    cout << "jobs           : Show the list of current jobs and their statuses." << endl;
+    cout << "cd <dir>       : Change the directory to the specified <dir>." << endl;
+    cout << "fg %<job_id>   : Brings the job with respective <job_id> to the foreground and continue them." << endl;
+    cout << "bg %<job_id>   : Continue the job with respective <job_id> in the background." << endl;
+    cout << "<command>      : Run the external command <command>." << endl;
+    cout << "!!             : Repeat the previous input every occasion of !!" << endl;
+    cout << "------------------------------------ JOB STATUSES ------------------------------------" << endl;
+    cout << "Running        : The job is running." << endl;
+    cout << "Done           : The job exited normally." << endl;
+    cout << "Interrupted    : The job was terminated by SIGINT." << endl;
+    cout << "Killed         : The job was terminated by SIGKILL." << endl;
+    cout << "Stopped        : The job is stopped by a signal." << endl;
+    cout << "EXIT <num>     : The job was terminated by a signal <num> other than the ones mentioned." << endl;
+    cout << "----------------------------------- IO REDIRECTION -----------------------------------" << endl;
+    cout << "<cmd> < <file> : The <file> now acts as STDIN for command <cmd>." << endl;
+    cout << "<cmd> > <file> : The output from command <cmd> is written to <file>." << endl;
+}
+
 //-------------------- ENUM setups and CMD tokenization --------------------
 
 void populate_map_cmd(){
@@ -557,6 +611,8 @@ void populate_map_cmd(){
     g_cmd_map["fg"] = Command::FG;
     g_cmd_map["bg"] = Command::BG;
     g_cmd_map["jobs"] = Command::JOBS;
+    g_cmd_map["cd"] = Command::CD;
+    g_cmd_map["help"] = Command::HELP;
 }
 
 vector<string> tokenize_cmd(string& inp, int& redir_index, int& redir_type){ 
