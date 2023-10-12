@@ -54,18 +54,48 @@ This ICSH (IC shell) was implemented as a part of MUIC's PCSA (Principle of Syst
 	- `help` : shows basic command syntaxes.
 	- `cd <dir>`: change directory.
 
-# Implementation and Designs (High-Level Discussion)
-----
+# Design Decision (High-Level TLDR.)
+-----
+## Workflow of the main shell: 
+1. The shell first begins by calling functions to set up enumerators, maps, setting up signal handlers, and backing up file descriptors for STDIO.
+2. The shell then check what modes is being used and run accordingly.
+3. The program then enters the loop and receive input from terminal. 
+4. The received input is then tokenized and is then passed to get enumerators accordingly.
+5. The enumerators is then used to decide which function to call.
+6. Return to point 3 until exit is received.
 
+```
+SETUP → MODE-CHECK → *RECIEVE INP → TOKENIZE → PASSED TO FUNCTIONS → *
+```
+## Jobs Control
+### Structs and Global vars.
+- The background jobs will be listed by their IDs incrementally inside a global vector.
+- The shell pgid is stored separately for cases of restoring control of terminal back to the shell.
+- The data of each job is stored as a struct called `Job`, in this struct there are 6 fields.
+```
+status ← the status of the current job (refer to jobs(0) for details.)
+pgid ← process group id
+job_id ← the id of the job
+is_alive ← tells if the current job is stil alive
+checked ← tells if  job has been checked and marked dead by the update_job_list() function. 
+has_bg ← tells whether this job has been to the background.
+pid_list ← stores the list of pids in this job
+```
+### Creating a job and assigning IDs 
+When a job is created, it can either start in the background or foreground, if the job was created in the background, job_id will be assigned to the new job, for the newly created foreground job, the job_id will be set to 0. However, once the foreground job is sent to the background, a new job_id will be assigned to it as well as marking has_bg as true meaning that no matter how many times that specific job is brought to background/foreground, it will have the same job_id as well as allowing O(1) access by job_id. 
 
+Every prompt, there will be a function to check whether checked is marked for all jobs and sending not alive jobs statues to console will run once. Once all jobs are considered finished, the count of the job id will reset allowing the next job_id to start at 1 again.
+### Dealing with \*possible race conditions
+Since we're using SIGCHLD to deal with zombies and Signaling status of child Asynchronously, it is logical to try prevent possible issues from race conditions.
 
-
-
+The field is_alive can only be set in one way meaning that, no matter what the status of the current job is, if for any reason there exist a status update that came way slower (*after the the job has already been terminated*) the job will not be considered nor updated to a new status (stay dead). 
+### Exit Statues
+The exit statuses for processes getting killed by signals is calculated using `128+n`to get the real exit status and showing correct messages. 
 # Manual
 ---------
 In this section we will discuss the syntaxes and functionalities of each commands. 
 
-The character ↪ will indicate the return value or value printed to console.
+The character `↪` will indicate the return value or value printed to console.
 ### echo(1)
 ---
 **NAME**
