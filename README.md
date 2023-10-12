@@ -54,9 +54,16 @@ This ICSH (IC shell) was implemented as a part of MUIC's PCSA (Principle of Syst
 	- `help` : shows basic command syntaxes.
 	- `cd <dir>`: change directory.
 
+# Implementation and Designs (High-Level Discussion)
+----
+
+
+
+
+
 # Manual
 ---------
-In this section we will discuss the syntaxes and implementations of each commands and functionalities. 
+In this section we will discuss the syntaxes and functionalities of each commands. 
 
 The character ↪ will indicate the return value or value printed to console.
 ### echo(1)
@@ -79,7 +86,7 @@ echo Never   gonna       give           you       up
 ↪ Never gonna give you up
 ```
 
-case 2: the command echo will print the most recent exit status of the terminated foreground process or built-in commands to the console. *note: echo will behave in this manner iff the only text following the command `echo` is `$?`*
+case 2: the command echo will print the most recent exit status of the terminated foreground process or built-in commands to the console. *note: echo will behave in this manner iff the only text following the command `echo` is `$?`*.
 
 Example: 
 ```shell
@@ -90,7 +97,7 @@ echo $?
 ### exit(1)
 --- 
 **NAME**
-`exit` - exit the shell with the given exit status
+`exit` - exit the shell with the given exit status.
 
 **SYNOPSIS**
 ```shell
@@ -98,4 +105,177 @@ exit <num>
 ```
 
 **DESCRIPTION**
-The shell exits and the return value is set to `<num>`
+The shell exits and the return value is set to `<num>`.
+
+### cd(1)
+------
+**NAME**
+`cd` - change the current directory to the specified directory.
+
+**SYNOPSIS**
+```shell
+1. cd <dir>
+2. cd ~
+```
+
+**DESCRIPTION**
+case 1: The current directory is set to `<dir>` if the specified directory is accessible, otherwise and error will be thrown to the console. 
+
+case 2: The current directory will be set to HOME.
+
+### cd(0)
+---- 
+**NAME**
+`cd` -  change the current directory to the specified directory.
+
+**SYNOPSIS**
+```shell
+cd 
+```
+
+**DESCRIPTION**
+The current directory will be set to HOME.
+
+### jobs(0)
+---- 
+**NAME**
+`jobs` - show the current jobs and their statuses list on the console.
+
+**SYNOPSIS**
+```shell
+jobs
+```
+
+**DESCRIPTION**
+Show the current jobs list and their statuses to the console in the format 
+`[job_id] <status>           <command>`
+
+if the job is running in the background, there will be `&` sign added to the back of the job.
+
+```shell
+[1] Running               sleep 2 &
+[2] Done                  ./test
+[3] Interrupted           ./a
+[4] Stopped               sleep 50
+[5] Killed                sleep 5
+[6] EXIT 143              sleep 1
+
+```
+
+Each statuses have these meanings accordingly:
+```
+1. Running     : The job is currently running in the background. 
+2. Done        : The job have terminated normally.
+3. Interrupted : The job was terminated by SIGINT or (Ctrl+C)
+4. Stopped     : The job is stopped by one of the stop signals including SIGTSTP. (Ctrl+Z)
+5. Killed      : The job was terminated by the signal SIGKILL.
+6. EXIT <num>  : The job is killed, stopped by the other signals not mentioned above.
+```
+
+**Jobs status behavior**
+After any jobs has entered a finished state,  (any status apart from running and stopped.) After the shell has received the signal, by the next prompt, the job will stop showing in the job list when `jobs` is called.
+
+### bg(1)
+-----
+**NAME**
+`bg %<job_id>` - continue background job.
+
+**SYNOPSIS**
+```shell
+bg %<job_id>
+```
+
+**DESCRIPTION**
+This command will continue any jobs in the background with the corresponding `<job_id>`, it the job doesn't exits or has already finished, "Invalid job id" will be written to the console. If the background job is already running, do nothing.
+
+### fg(1)
+---- 
+**NAME**
+`fg %<job_id>` - bring background job to foreground and continue.
+
+**SYNOPSIS**
+```shell
+fg %<job_id>
+```
+
+**DESCRIPTION**
+This command will bring the background job to foreground according to its `<job_id>`, and continues the job. 
+
+
+## Special Characters
+### !!
+-----
+**NAME**
+`!!` - double bang, repeats the previous input string. 
+
+**SYNOPSIS**
+```shell
+# Assume the previous command is echo a
+!!
+↪ echo a
+↪ a
+!!!!
+↪ echo aecho a
+↪ aecho a
+!!! 
+↪ echo aecho a!
+↪ aecho a!
+```
+
+**DESCRIPTION**
+This command is implemented in the same manner as bash, using REGEX, every occurrence of `!!` will now be replaced by the previous input string. After the new input string is built, it is now sent to the command processing function to act accordingly.
+
+## IO Redirection
+### >
+----
+**NAME**
+`<command> > <file>` - Redirecting command output to file.
+
+**SYNOPSIS**
+```shell
+<command> > <file>
+```
+
+**DESCRIPTION**
+This command allow only one time redirection per input, the first occurrence of `>` will be the splitting point between the command and the file.
+
+Example: 
+```shell
+echo a > test.txt
+```
+Doing this will write a to the file test.txt
+
+### < 
+-----
+**NAME**
+`<command> < <file>` - Redirection input of the command to the file.
+
+**SYNOPSIS**
+```shell
+<command> < <file> 
+```
+
+**DESCRIPTION**
+This command allow only one time redirection per input, the first occurrence of `<` will be the splitting point between the command and the file.
+
+Example: 
+```shell
+cat < test.txt
+↪ a
+```
+
+### \<external command>
+-----
+**NAME**
+`<external command>` - Call other external commands.
+
+**SYNOPSIS**
+```shell
+<external command>
+```
+
+**DESCRIPTION**
+Any input that does not match with the syntaxes prior to this will fall into this case. The command `<external command>` will be called after forking using execvp. The `<external command>` will perform accordingly the way it is programmed to if exist and the argument is passed correctly, otherwise, an error will be thrown to the console.
+
+----
+<center>END OF MANUAL</center>
