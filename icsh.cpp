@@ -23,7 +23,6 @@
 using namespace std;
 
 //-------------------- Structs --------------------
-// NOTE: If we were to handle multiple jobs, create struct of processes that point to jobs.
 
 struct Job{                                                                 // Job Struct
     int status;                                                             // The status of the current job. <refer to g_status_string_map for details>.
@@ -91,7 +90,7 @@ int g_job_unalive_count = 0;                                                // T
 
 int main(int argc, char *argv[]){
     // Setup and Backups
-    char buffer[MAX_CMD_BUFFER]; // INQUIRY: Do we really need to input size? 
+    char buffer[MAX_CMD_BUFFER]; 
     bool exit = false;                                                      
     populate_map_cmd();
     populate_map_status_to_string();
@@ -284,7 +283,6 @@ void sigchld_handler(int sig){
     int status;
     pid_t pgid;
     while( (pgid = waitpid(-1, &status, WNOHANG)) > 0){
-    // This check if ANY process in a particular pg died (since we have only 1 its ok to do this.)
         current_job = get_job_ptr(pgid,found_job,1);
         if(found_job) job_status_signal(current_job, status);
     }
@@ -326,7 +324,7 @@ int job_wait(struct Job* current_job){
     pid_t pgid = current_job -> pgid;
     int n_exit_stat= EXIT_FAILURE, status;
 
-    waitpid(-pgid, &status, WUNTRACED); //This check if ANY process in a particular pg died (since we have only 1 its ok to do this.)
+    waitpid(-pgid, &status, WUNTRACED); 
     n_exit_stat = job_status_signal(current_job,status);
     return n_exit_stat % 256;
 }
@@ -339,7 +337,7 @@ int to_foreground(struct Job* current_job, bool cont){
     g_fg_pgid = pgid;
 
     if(cont){ //if continue then the process must be called from background
-        if(current_job -> status == 3 && killpg(pgid, SIGCONT) < 0) perror("SIGCONT FAILED"); //this is just a placeholder. 
+        if(current_job -> status == 3 && killpg(pgid, SIGCONT) < 0) perror("SIGCONT failed");
         cout << current_job -> cmd << endl;
     } else {
         current_job -> has_bg = 0;
@@ -357,7 +355,7 @@ bool cont_background(struct Job* current_job, bool cont){
     current_job -> has_bg = 1;
     if(cont){
         if(current_job -> status == 3 && killpg(current_job -> pgid, SIGCONT) < 0){
-            perror("SIGCONT FAILED"); // This is just a placeholder.
+            perror("SIGCONT failed"); 
             return 0;
         } else {
             current_job -> status = 0;
@@ -444,7 +442,6 @@ void populate_map_status_to_string(){
     g_status_string_map[4] = "Killed"; // SIGKILL
 }
 
-
 //-------------------- Process handling --------------------
 
 int external_cmd_call(vector<string> cmd, bool is_fg, string cmd_string){
@@ -467,9 +464,6 @@ int external_cmd_call(vector<string> cmd, bool is_fg, string cmd_string){
 
     pid_t pid = fork();
 
-    // NOTE: IFF we're gonna handle several process per each job, throw all this in loop while doing the following.
-    // Determine which process will be the leader, maybe handle pipe from one process to another.
-
     if(pid < 0){
         perror("Fork failed.");
         exit(errno);
@@ -479,7 +473,7 @@ int external_cmd_call(vector<string> cmd, bool is_fg, string cmd_string){
         exit(errno);
     } else {
         current_job.pid_list.push_back(pid);
-        current_job.pgid = pid; // NOTE: This is acceptable here since we have only 1 process / group
+        current_job.pgid = pid;
         setpgid(pid,current_job.pgid); 
         
         if(is_fg){
@@ -500,7 +494,7 @@ int external_cmd_call(vector<string> cmd, bool is_fg, string cmd_string){
 
 //-------------------- Script mode --------------------
 
-void script_mode(int argc, char *argv[]){ // INQUIRY: check if we need to repeat the function prompt first before calling when using !! 
+void script_mode(int argc, char *argv[]){
     if(argc != 2) cout << "Invalid numbers of arguments." << endl;
     else {
         string buffer;
