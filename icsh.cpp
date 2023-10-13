@@ -30,7 +30,7 @@ struct Job{                                                                 // J
     int status;                                                             // The status of the current job. <refer to g_status_string_map for details>.
     pid_t pgid;                                                             // The job's leader pid.
     int job_id;                                                             // The current job's id.
-    bool is_alive, checked, has_bg;                                         // Job statuses
+    bool is_alive, checked, has_bg, fg_dead;                                // Job statuses
     string cmd;                                                             // Tokenized commands.
     vector<pid_t> pid_list;                                                 // List of pids in this job.
 } ;
@@ -199,7 +199,7 @@ bool call_command(string inp){
                 break;
             }
             joi = get_job_ptr(full_cmd[1],valid_job_id);
-            if(valid_job_id) g_prev_exit = to_foreground(joi,1);
+            if(valid_job_id && (joi -> is_alive)) g_prev_exit = to_foreground(joi,1);
             else cout << "Invalid job id." << endl;
             break;
 
@@ -209,7 +209,7 @@ bool call_command(string inp){
                 break;
             }
             joi = get_job_ptr(full_cmd[1],valid_job_id);
-            if(valid_job_id) cont_background(joi,1);
+            if(valid_job_id && (joi -> is_alive)) cont_background(joi,1);
             else cout << "Invalid job id." << endl;
             break;
 
@@ -310,6 +310,9 @@ int job_status_signal(struct Job* current_job, int status){
         n_exit_stat = WEXITSTATUS(status); 
         current_job -> status = 1; // Done
         current_job -> is_alive = 0;
+        if(current_job -> pgid == g_fg_pgid){
+            current_job -> fg_dead = 1; // This process died in the foreground.
+        }
     } else if(WIFSTOPPED(status)) {
         n_exit_stat = 128 + WSTOPSIG(status); // 148 SIGTSTP
         current_job -> status = 3; // STOPPED signals
@@ -330,6 +333,9 @@ int job_status_signal(struct Job* current_job, int status){
         else if(n_exit_stat == 137) current_job -> status = 4; // SIGKILL
         else current_job -> status = n_exit_stat; //other method
         current_job -> is_alive = 0;
+        if(current_job -> pgid == g_fg_pgid){
+            current_job -> fg_dead = 1; // This process died in the foreground.
+        } 
     }
     return n_exit_stat %256;
 }
@@ -373,8 +379,12 @@ bool cont_background(struct Job* current_job, bool cont){
             perror("SIGCONT failed"); 
             return 0;
         } else {
-            current_job -> status = 0;
-            cout << "[" << current_job -> job_id << "] " << current_job -> cmd << " &"  << endl;
+            if (current_job -> status == 0){
+                cout << "job " << current_job -> job_id << " already in background." << endl;
+            } else {
+                current_job -> status = 0;
+                cout << "[" << current_job -> job_id << "] " << current_job -> cmd << " &"  << endl;
+            }
         }
     } else { // This means this is a newly created job.
         current_job -> status = 0;
@@ -390,7 +400,7 @@ void update_jobs_list(){
         if (!j.checked && !j.is_alive){
             g_job_unalive_count++;
             j.checked = 1;
-            cout << "[" << j.job_id << "] " << get_status_string(j.status) << "\t\t" << j.cmd << endl;
+            if(!j.fg_dead) cout << "[" << j.job_id << "] " << get_status_string(j.status) << "\t\t" << j.cmd << endl;
         } 
     }
 
@@ -476,6 +486,7 @@ int external_cmd_call(vector<string> cmd, bool is_fg, string cmd_string){
     current_job.is_alive = 1;
     current_job.checked = 0;
     current_job.has_bg = 0;
+    current_job.fg_dead = 0;
 
     pid_t pid = fork();
 

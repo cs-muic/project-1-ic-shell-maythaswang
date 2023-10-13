@@ -216,7 +216,7 @@ bg %<job_id>
 ```
 
 **DESCRIPTION**
-This command will continue any jobs in the background with the corresponding `<job_id>`, it the job doesn't exits or has already finished, "Invalid job id" will be written to the console. If the background job is already running, do nothing.
+This command will continue any jobs in the background with the corresponding `<job_id>`, it the job doesn't exits or has already finished, "Invalid job id" will be written to the console. If the background job is already running, do nothing. If the current job with the corresponding `<job_id>` is already running, a message will be printed to the console.
 
 ### fg(1)
 ---- 
@@ -230,8 +230,6 @@ fg %<job_id>
 
 **DESCRIPTION**
 This command will bring the background job to foreground according to its `<job_id>`, and continues the job. 
-
-
 ## Special Characters
 ### !!
 -----
