@@ -77,7 +77,8 @@ status ← the status of the current job (refer to jobs(0) for details.)
 pgid ← process group id
 job_id ← the id of the job
 is_alive ← tells if the current job is stil alive
-checked ← tells if  job has been checked and marked dead by the update_job_list() function. 
+fg_dead ← tells if the job died in the foreground
+checked ← tells if job has been checked and marked dead by the update_job_list() function. 
 has_bg ← tells whether this job has been to the background.
 pid_list ← stores the list of pids in this job
 ```
